@@ -9,8 +9,14 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  layers:
+    name: test_${{ matrix.layer }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        layer: [fp, tower, curve, miller, g2_check, pairing, binding, groth16]
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
@@ -19,7 +25,17 @@ jobs:
       - name: Build the harness
         working-directory: tools/harness
         run: cargo build --release --locked
-      - name: Field arithmetic
-        run: python3 tests/test_fp.py
-      - name: Extension fields
-        run: python3 tests/test_tower.py
+      - run: python3 tests/test_${{ matrix.layer }}.py
+
+  # The plain Python reference.
+  reference:
+    name: test_bn254_ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - run: pip install py_ecc
+      - run: python3 tests/test_bn254_ref.py

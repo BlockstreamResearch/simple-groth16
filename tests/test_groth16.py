@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The whole verifier (groth/groth16.py) on a synthetic key, unpadded and padded.  A wrong public input
-and a tampered proof must be rejected.
+"""The whole verifier (groth/groth16.py) on a synthetic key.  A wrong public input and a tampered proof
+must be rejected, and the budget of the input must cover the cost (with padding if needed).
 
     python3 tests/test_groth16.py             # one public input
     INPUTS=2 python3 tests/test_groth16.py    # two
 """
 import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B, miller as M
+from groth import fp as F, bn254 as B, pairing as PC
 from groth.groth16 import Groth16
 from groth.sym import Num
 import harness
@@ -18,12 +18,12 @@ def main():
     w = int(os.environ.get('W', '5'))
     vk, proof, inputs = B.groth16_instance(n, seed=int(os.environ.get('SEED', '7')))
     assert B.groth16_verify(vk, proof, inputs)
-    bnd = M.bounds()
+    bnd = PC.bounds()
     # prover
     g = Groth16(F.Fp(Num()), vk, w, b=bnd)
     t0 = time.time()
     wit = g.witness(proof, inputs)
-    print(f'witness in {time.time() - t0:.1f}s: s = {wit["s"]}, {len(wit["msm_hints"])} MSM slopes, {len(wit["hints"])} slopes of B')
+    print(f'witness in {time.time() - t0:.1f}s: s = {wit["s"]}, {len(wit["msm_hints"])} MSM slopes, {len(wit["leaves"])} leaves, {len(wit["q"])} words of Q')
     assert g.witness((proof[0], proof[1], B.g1_add(proof[2], B.G1_GEN)), inputs) is None, 'a wrong proof has no witness'
     # numeric model
     g.verify(g.num_input(wit))
@@ -52,18 +52,16 @@ def main():
             ('range checks', g.parts['range checks']), ('whole program', r['cost'])]
     for name, cst in rows:
         print(f'{name:48} {cst:>12,}')
-    # the padded program: the budget of the input (program + witness bytes + 50, times 1000) must cover the cost
+    # the budget of the input (program + witness bytes + 50, times 1000) must cover the cost; pad if not
     pad = Groth16.padding(r['cost'], r['program_bytes'], r['witness_bytes'])
-    text_p, gp, estimate_p = Groth16.compile(vk, w, pad_blocks=pad, b=bnd)
-    rp = harness.run(f'groth16_{n}_padded', text_p, wv(gp, wit))
-    harness.expect_ok(rp, 'groth16 padded')
-    assert rp['cost'] == estimate_p, (rp['cost'], estimate_p)
-    assert Groth16.budget_ok(rp['cost'], rp['program_bytes'], rp['witness_bytes']), 'budget'
-    weight = rp['program_bytes'] + rp['witness_bytes'] + 33 + 9
-    print(f'padded with {pad} blocks of 512 bytes: cost {rp["cost"]:,} mWU, program {rp["program_bytes"]:,} B + witness {rp["witness_bytes"]:,} B: '
+    if pad:
+        text, g, estimate = Groth16.compile(vk, w, pad_blocks=pad, b=bnd)
+        r = harness.expect_ok(harness.run(f'groth16_{n}_padded', text, wv(g, wit)), 'groth16 padded')
+        assert r['cost'] == estimate, (r['cost'], estimate)
+    assert Groth16.budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), 'budget'
+    weight = r['program_bytes'] + r['witness_bytes'] + 33 + 9
+    print(f'{pad} padding blocks: cost {r["cost"]:,} mWU, program {r["program_bytes"]:,} B + witness {r["witness_bytes"]:,} B: '
           f'the input weighs about {weight:,} WU and its budget covers the cost')
-    print(f'{"whole program with %d padding blocks" % pad:48} {rp["cost"]:>12,}')
-
 
 if __name__ == '__main__':
     main()

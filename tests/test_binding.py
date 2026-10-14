@@ -8,7 +8,7 @@ for another sighash must be rejected.
 """
 import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B, miller as M, merkle
+from groth import fp as F, bn254 as B, pairing as PC, merkle
 from groth.groth16 import Groth16
 from groth.sym import Num
 import harness
@@ -25,7 +25,7 @@ def main():
     assert len(sibs) == depth == 2 and Groth16.root(DUMMY_SIGHASH, sibs) == root
     vk, proof, inputs = B.groth16_instance(1, seed=11, inputs=[root])
     assert B.groth16_verify(vk, proof, inputs)
-    bnd = M.bounds()
+    bnd = PC.bounds()
     g = Groth16(F.Fp(Num()), vk, b=bnd, depth=depth)
     wit = g.witness(proof, inputs, DUMMY_SIGHASH, sibs)
     assert wit is not None and g.witness(proof, inputs, bytes(32), sibs) is None, 'the siblings must give the input'

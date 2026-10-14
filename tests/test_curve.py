@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""G1/G2 steps with hinted slopes, on-curve checks and the MSM (groth/curve.py) against bn254.py.
-Wrong hints, off-curve points and a scalar >= r must be rejected.
+"""On-curve checks and the MSM with hinted slopes (groth/curve.py) against bn254.py.  Off-curve points,
+a wrong hint and a scalar >= r must be rejected.
 
     python3 tests/test_curve.py
 """
 import os, random, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from groth import fp as F, bn254 as B
-from groth.curve import Curve, chain, fp2_hint_words
+from groth.curve import Curve
 from groth.sym import Sym, Num, E
 from groth.dsl import wv, wbalanced, Tbalanced, balanced_paths
 import harness
@@ -50,14 +50,6 @@ def run(name, words, build, expect_ok=True, verbose=True, hi=None):
     return r, exp
 
 
-def decode(exp, label):
-    return F.from_mont(exp[label])
-
-
-def fp2_of(exp, lx, ly):
-    return B.Fp2(decode(exp, lx), decode(exp, ly))
-
-
 def rand_g2(rng):
     return B.g2_mul(B.G2_GEN, rng.randrange(1, B.R))
 
@@ -68,38 +60,6 @@ def rand_g1(rng):
 
 def g2_words(T):
     return [F.to_mont(T[0].c0), F.to_mont(T[0].c1), F.to_mont(T[1].c0), F.to_mont(T[1].c1)]
-
-
-# G2 doubling: witness (x, y, lam)
-def build_g2_double(fp, cv, ins, check):
-    ctx = {'x': (ins[0], ins[1]), 'y': (ins[2], ins[3]), 'lam': (ins[4], ins[5])}
-
-    def final(c, checks):
-        outs = [check('x2_0', c['x2'][0]), check('x2_1', c['x2'][1]), check('y2_0', c['y2'][0]),
-                check('y2_1', c['y2'][1]), check('c4_0', c['c4'][0]), check('c4_1', c['c4'][1]),
-                check('lam_0', c['lam'][0]), check('lam_1', c['lam'][1])]
-        return fp.be.checks([v.e for v in checks + outs])
-    return chain(fp, ctx, cv.g2_double_steps(), final)
-
-
-def build_g2_add(fp, cv, ins, check):
-    ctx = {'x': (ins[0], ins[1]), 'y': (ins[2], ins[3]), 'qx': (ins[4], ins[5]), 'qy': (ins[6], ins[7]),
-           'lam': (ins[8], ins[9])}
-
-    def final(c, checks):
-        outs = [check('x2_0', c['x2'][0]), check('x2_1', c['x2'][1]), check('y2_0', c['y2'][0]),
-                check('y2_1', c['y2'][1]), check('c4_0', c['c4'][0]), check('c4_1', c['c4'][1])]
-        return fp.be.checks([v.e for v in checks + outs])
-    return chain(fp, ctx, cv.g2_add_steps(), final)
-
-
-def build_g1_add(fp, cv, ins, check):
-    ctx = {'x': ins[0], 'y': ins[1], 'qx': ins[2], 'qy': ins[3], 'lam': ins[4]}
-
-    def final(c, checks):
-        outs = [check('x2', c['x2']), check('y2', c['y2'])]
-        return fp.be.checks([v.e for v in checks + outs])
-    return chain(fp, ctx, cv.g1_add_const_steps(), final)
 
 
 def build_g1_on_curve(fp, cv, ins, check):
@@ -165,36 +125,7 @@ def run_msm(name, rng, n_scalars, w, nbits=254, verbose=True, tamper=None):
 
 def main():
     rng = random.Random(int(os.environ.get('SEED', '3')))
-    # G2 doubling
-    T = rand_g2(rng)
-    lam = Curve.g2_double_hint(T)
-    T2, (c3, c4) = B.affine_step(T, lam)
-    r, exp = run('g2_double', g2_words(T) + fp2_hint_words(lam), build_g2_double)
-    assert fp2_of(exp, 'x2_0', 'x2_1') == T2[0] and fp2_of(exp, 'y2_0', 'y2_1') == T2[1]
-    assert fp2_of(exp, 'c4_0', 'c4_1') == c4 and fp2_of(exp, 'lam_0', 'lam_1') == lam
-    # wrong hint
-    bad = lam + B.Fp2(1, 0)
-    run('g2_double_badhint', g2_words(T) + fp2_hint_words(bad), build_g2_double, expect_ok=False)
-    # hint words need not be canonical (any 256-bit word): add p to one of them
-    w = fp2_hint_words(lam); w[0] += P
-    run('g2_double_nc', g2_words(T) + w, build_g2_double, hi=[P - 1] * 4 + [F.WORD_MAX] * 2)
-    # G2 addition
-    Q = rand_g2(rng)
-    lam = Curve.g2_add_hint(T, Q)
-    T3, (c3, c4) = B.affine_step(T, lam, Q)
-    r, exp = run('g2_add', g2_words(T) + g2_words(Q) + fp2_hint_words(lam), build_g2_add)
-    assert fp2_of(exp, 'x2_0', 'x2_1') == T3[0] and fp2_of(exp, 'y2_0', 'y2_1') == T3[1]
-    assert fp2_of(exp, 'c4_0', 'c4_1') == c4
-    run('g2_add_badhint', g2_words(T) + g2_words(Q) + fp2_hint_words(lam + B.Fp2(0, 1)), build_g2_add, expect_ok=False)
-    # T + T through the addition formula must be rejected (xQ = xT), whatever the hint
-    run('g2_add_same_x', g2_words(T) + g2_words(T) + fp2_hint_words(Curve.g2_double_hint(T)), build_g2_add, expect_ok=False)
-    # G1 addition with a (table) point
-    Pt, Qt = rand_g1(rng), rand_g1(rng)
-    lam1 = Curve.g1_add_hint(Pt, Qt)
-    S = B.g1_add(Pt, Qt)
-    r, exp = run('g1_add', [F.to_mont(Pt[0]), F.to_mont(Pt[1]), F.to_mont(Qt[0]), F.to_mont(Qt[1]), F.to_mont(lam1)], build_g1_add)
-    assert (decode(exp, 'x2'), decode(exp, 'y2')) == S
-    run('g1_add_badhint', [F.to_mont(Pt[0]), F.to_mont(Pt[1]), F.to_mont(Qt[0]), F.to_mont(Qt[1]), F.to_mont(lam1 + 1)], build_g1_add, expect_ok=False)
+    T, Pt = rand_g2(rng), rand_g1(rng)
     # on-curve checks
     run('g1_on_curve', [F.to_mont(Pt[0]), F.to_mont(Pt[1])], build_g1_on_curve)
     run('g1_off_curve', [F.to_mont(Pt[0]), F.to_mont(Pt[1] + 1)], build_g1_on_curve, expect_ok=False)

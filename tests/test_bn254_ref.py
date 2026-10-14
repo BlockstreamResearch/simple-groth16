@@ -6,7 +6,7 @@ residue witness, Groth16 verification, and points of the twist outside G2.
 """
 import os, random, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B
+from groth import bn254 as B, poly
 from py_ecc import bn128 as E
 
 rng = random.Random(1)
@@ -21,30 +21,8 @@ def to_pyecc_g2(pt):
 
 
 def to_pyecc_fq12(f):
-    # py_ecc's FQ12 is Fp[w]/(w^12 - 18 w^6 + 82); ours is the tower.  Compare through the tower -> poly map:
-    # element = sum c_{i,j,k} u^i v^j w^k with u = w^6 - 9, v = w^2, so u^i v^j w^k = (w^6-9)^i w^(2j+k).
-    coeffs = [0] * 12
-    def add_poly(cs, mult):
-        for d, c in enumerate(cs):
-            coeffs[d] = (coeffs[d] + c * mult) % B.P
-    for k, c6 in enumerate((f.c0, f.c1)):
-        for j, c2 in enumerate((c6.c0, c6.c1, c6.c2)):
-            for i, c in enumerate((c2.c0, c2.c1)):
-                # (w^6 - 9)^i * w^(2j+k)
-                poly = [0] * 12
-                if i == 0:
-                    poly[2 * j + k] = 1
-                else:
-                    e = 6 + 2 * j + k
-                    if e < 12:
-                        poly[e] = 1
-                    else:
-                        # w^12 = 18 w^6 - 82
-                        poly[e - 12] = (-82) % B.P
-                        poly[e - 6] = 18
-                    poly[2 * j + k] = (poly[2 * j + k] - 9) % B.P
-                add_poly(poly, c)
-    return E.FQ12(coeffs)
+    # py_ecc's FQ12 is F_p[w] / (w^12 - 18 w^6 + 82), the direct extension of groth/poly.py
+    return E.FQ12(poly.from_tower(f))
 
 
 def test_tower():

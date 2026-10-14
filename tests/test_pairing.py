@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""The pairing check with the residue witness (groth/pairing.py) on an instance with
-e(A, B) e(L, gamma) e(C, delta) = 1.  A wrong s, a wrong c, a wrong slope and a false instance must be
-rejected.
+"""The pairing check as one polynomial identity (groth/pairing.py), on an instance with
+e(A, B) e(L, gamma) e(C, delta) = 1.  The model's S(z) must equal Q(z) M(z), the program must accept,
+and it must reject witnesses that are wrong in one place but sealed consistently (r, Q and z
+recomputed), so that only the identity can catch them: a wrong slope, a wrong Miller value, a wrong
+inverse, a wrong s.  A wrong challenge and a false instance must be rejected too.
 
     python3 tests/test_pairing.py
 """
 import os, random, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B, miller as M
-from groth.pairing import PairingCheck
-from groth.sym import Sym, Num
-from groth.dsl import wv, wpair, wbalanced, Tbalanced, balanced_paths
+from groth import fp as F, bn254 as B, poly, pairing as PC
+from groth.dsl import CheckFailed, Tbalanced, wv, wpair, wbalanced
+from groth.sym import Sym, Num, words
 import harness
 
 P = F.P
@@ -26,78 +27,92 @@ def instance(rng, key):
     return gamma, delta, [(A, Bq), (L, gamma), (C, delta)]
 
 
-def point_words(pairs):
-    (A, Bq), (L, _), (C, _) = pairs
-    return [F.to_mont(v) for v in (A[0], A[1], Bq[0].c0, Bq[0].c1, Bq[1].c0, Bq[1].c1, C[0], C[1], L[0], L[1])]
+INPUT = 12345 # a public input word: the check only hashes it
 
 
-def run_program(pc, pw, c, ci, sel, hints):
-    V = lambda w: F.Val(w, F.WORD_MAX)
-    return pc.program((V(pw[0]), V(pw[1])), tuple(V(x) for x in pw[2:6]), (V(pw[6]), V(pw[7])), (V(pw[8]), V(pw[9])),
-                      [V(x) for x in c], [V(x) for x in ci], sel, hints)
+def numeric(gamma, delta, const, L, w, b):
+    pc = PC.PairingCheck(F.Fp(Num()), gamma, delta, const, b)
+    Lw = [F.Val(F.to_mont(L[0]), F.WORD_MAX), F.Val(F.to_mont(L[1]), F.WORD_MAX)]
+    (pts, (c, ci)), ((sel, rz), (leaves, q)) = PC.witness_num(w)
+    return pc.program({'L': Lw, 'words': [INPUT]}, pts, c, ci, sel, rz, leaves, q)
+
+
+def program(gamma, delta, const, b):
+    """The check alone; witness ((xL, yL), input word, the check's witness)."""
+    bits = 3 * 256 + PC.witness_bits()
+    be = Sym(bits); fp = F.Fp(be)
+    pc = PC.PairingCheck(fp, gamma, delta, const, b)
+    (Lw, inp), ((pts, (c, ci)), ((sel, rz), (leaves, q))) = be._unpack('', [[words(2), words(1)], PC.witness_shape()])
+    body = pc.program({'L': [F.Val(x, F.WORD_MAX) for x in Lw], 'words': inp}, pts, c, ci, sel, rz, leaves, q)
+    be.em.define('w_in', 'witness', f'_ -> (({Tbalanced(["2^256"] * 2)} * 2^256) * {PC.witness_type()})')
+    be.em.define('main', f'comp w_in ({body.t})')
+    return be.em.text(), 2 * (100 + bits) + body.c, pc
+
+
+def witness(L, w):
+    return {'w_in': wpair(wpair(wbalanced([wv(256, F.to_mont(L[0])), wv(256, F.to_mont(L[1]))]), wv(256, INPUT)),
+                          PC.witness_value(w))}
+
+
+def tampered(prover, w, how):
+    """The honest values with one change, sealed again."""
+    v = {k: (list(x) if isinstance(x, list) else dict(x) if isinstance(x, dict) else x) for k, x in w['values'].items()}
+    v['f'] = [list(f) for f in v['f']]
+    add = next(i for i, k in enumerate(PC.STEPS) if k in PC.ADDS)
+    if how == 'slope':
+        v['lam'][10] = v['lam'][10] + 1
+    elif how == 'Miller value':
+        v['f'][40][3] += 1
+    elif how == 'inverse':
+        v['d'][add] = v['d'][add] + 1
+    elif how == 's':
+        v['s'] = (v['s'] + 1) % 3
+    return prover.seal(v, [INPUT], check=False)
 
 
 def main():
     rng = random.Random(int(os.environ.get('SEED', '5')))
     gamma, delta, pairs = instance(rng, random.Random(11))
     assert B.multi_pairing(pairs).is_one()
-    bnd = M.bounds()
-    hints = M.hint_words(pairs[0][1])
-    pw = point_words(pairs)
-    # prover
-    be = Num(); fp = F.Fp(be)
-    pc = PairingCheck(fp, gamma, delta, b=bnd)
+    (A, Bq), (L, _), (C, _) = pairs # the check's first point is A itself here (Groth16 passes -A)
+    const = B.Fp12.one()
+    print(f'{PC.N_RELS} relations, S of degree {PC.DEG_S}, Q of {PC.N_Q} coefficients')
+    # prover and model
+    prover = PC.Prover(gamma, delta, const)
     t0 = time.time()
-    cw, ciw, s = pc.witness(pairs)
-    print(f'residue witness: s = {s} ({time.time() - t0:.1f}s)')
+    w = prover.witness(pairs, [INPUT])
+    r, z = F.from_mont(w['r']), F.from_mont(w['z'])
+    R = PC.NumRing(z)
+    S = PC.horner(R, PC.relations(R, w['values'], prover.lines, prover.table), r)
+    assert S == poly.evaluate([F.from_mont(x) for x in w['q']], z) * poly.evaluate(poly.M, z) % P
+    print(f'witness in {time.time() - t0:.1f}s: s = {w["s"]}, S(z) = Q(z) M(z)')
+    bad = [(how, tampered(prover, w, how)) for how in ('slope', 'Miller value', 'inverse', 's')]
+    wrong_r = dict(w); wrong_r['r'] ^= 1
     # numeric model
-    run_program(pc, pw, cw, ciw, [s >> 1, s & 1], hints)
-    print('numeric model ok')
-    # symbolic: witness = ((points, (c, c^-1)), ((s1, s0), hints))
-    nh = M.N_STEPS
-    be = Sym(256 * 34 + 2 + 512 * nh); fp = F.Fp(be)
-    pc = PairingCheck(fp, gamma, delta, b=bnd)
-    pts = [F.Val(be.proj('OO' + p, 256), F.WORD_MAX) for p in balanced_paths(10)]
-    c = [F.Val(be.proj('OIO' + p, 256), F.WORD_MAX) for p in balanced_paths(12)]
-    ci = [F.Val(be.proj('OII' + p, 256), F.WORD_MAX) for p in balanced_paths(12)]
-    sel, hints_root = be.proj('IOH', 2), be.proj('IIH', 512 * nh)
-    body = pc.program((pts[0], pts[1]), tuple(pts[2:6]), (pts[6], pts[7]), (pts[8], pts[9]), c, ci, sel, hints_root)
-    w256 = ['2^256']
-    ty = (f'(({Tbalanced(w256 * 10)} * ({Tbalanced(w256 * 12)} * {Tbalanced(w256 * 12)})) * '
-          f'((2 * 2) * {Tbalanced(["(2^256 * 2^256)"] * nh)}))')
-    be.em.define('w_in', 'witness', f'_ -> {ty}')
-    be.em.define('main', f'comp w_in ({body.t})')
-    estimate = 2 * (100 + 256 * 34 + 2 + 512 * nh) + body.c
-    text = be.em.text()
-
-    def witness(points, cw, ciw, s, hw):
-        return {'w_in': {'p': [{'p': [wbalanced([wv(256, w) for w in points]),
-                                      {'p': [wbalanced([wv(256, w) for w in cw]), wbalanced([wv(256, w) for w in ciw])]}]},
-                               {'p': [{'p': [{'bit': s >> 1}, {'bit': s & 1}]},
-                                      wbalanced([wpair(wv(256, lx), wv(256, ly)) for lx, ly in hw])]}]}}
-    bad_c = list(cw); bad_c[0] = (bad_c[0] + 1) % (1 << 256)
-    bad_hint = [list(h) for h in hints]; bad_hint[40][1] ^= 1
-    # a non-satisfying instance: C + G1 with the witness of the satisfying one
-    (A, Bq), (L, _), (C, _) = pairs
-    bad_pts = point_words([(A, Bq), (L, gamma), (B.g1_add(C, B.G1_GEN), delta)])
+    b = PC.bounds()
+    numeric(gamma, delta, const, L, w, b)
+    for how, wb in bad + [('challenge', wrong_r)]:
+        try:
+            numeric(gamma, delta, const, L, wb, b)
+            raise AssertionError(f'numeric model accepted a wrong {how}')
+        except CheckFailed:
+            pass
+    print('numeric model ok, rejects the tampered witnesses')
+    # false instance: no witness
+    false = [pairs[0], pairs[1], (B.g1_add(C, B.G1_GEN), delta)]
+    assert prover.witness(false, [INPUT]) is None
+    # the program
+    text, estimate, pc = program(gamma, delta, const, b)
     t0 = time.time()
-    results = harness.run('pairing', text, witness(pw, cw, ciw, s, hints), multi=[
-        witness(pw, cw, ciw, (s + 1) % 3, hints), witness(pw, bad_c, ciw, s, hints), witness(pw, cw, ciw, s, bad_hint),
-        witness(bad_pts, cw, ciw, s, hints)])
-    seconds = time.time() - t0
-    r = harness.expect_ok(results[0], 'pairing')
-    assert r['cost'] == estimate, (r['cost'], estimate)
-    for bad, label in zip(results[1:], ('wrong s', 'wrong c', 'wrong hint', 'bad instance')):
-        assert not bad.get('ok') and bad.get('stage') in ('exec', 'finalize'), (label, bad)
-        print(f'{label:14} rejected as expected')
-    print(f'pairing check cost {r["cost"]:,}  estimate {estimate:,}  ok  prog {r["program_bytes"]} B  '
-          f'cells {r.get("cells")}  text {len(text) // 1024} KB  ({seconds:.0f}s for five runs)')
-    m = pc.m
-    rows = [(name, m.costs[name]) for name in ('SQRN', 'DMULN', 'LM1', 'LM2', 'LMN', 'BSTEP_DBL', 'BSTEP_ADD', 'ITER_D', 'ITER_F', 'ITER_A')]
-    rows += [('setup (normalisation, on-curve checks, c c^-1 = 1)', pc.parts['setup']), ('loop (88 steps)', pc.parts['loop']),
-             ('final (Frobenius factors, three products, comparison)', pc.parts['final']), ('whole program', r['cost'])]
-    for name, cst in rows:
-        print(f'{name:42} {cst:>12,}')
+    res = harness.run('pairing', text, witness(L, w), multi=[witness(L, wb) for _, wb in bad + [('challenge', wrong_r)]])
+    ok = harness.expect_ok(res[0], 'pairing check')
+    assert ok['cost'] == estimate, (ok['cost'], estimate)
+    for (how, _), rb in zip(bad + [('challenge', None)], res[1:]):
+        assert not rb.get('ok') and rb.get('stage') in ('exec', 'finalize'), (how, rb)
+        print(f'wrong {how:13} rejected')
+    print(f'pairing check cost {ok["cost"]:,}: setup {pc.parts["setup"]:,}, loop {pc.parts["loop"]:,}, final {pc.parts["final"]:,}')
+    print('steps: ' + ', '.join(f'{k} {v:,}' for k, v in pc.costs.items()))
+    print(f'program {ok["program_bytes"]:,} B, witness {ok["witness_bytes"]:,} B ({time.time() - t0:.0f}s)')
 
 
 if __name__ == '__main__':

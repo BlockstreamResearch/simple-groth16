@@ -17,7 +17,7 @@ The cost must fit a budget of 1,000 mWU per byte of the spending input's witness
 
 ## Python generator
 
-The Groth16 verifier performs about 25,000 multiplications in the BN254 field, each made of several 256-bit jet calls, plus the data movement between them. At this scale the cost is decided by how values are laid out and moved, and the program has to control that precisely to fit the budget. That control is what the generator provides.
+The Groth16 verifier performs about 4,500 multiplications in the BN254 field, each made of several 256-bit jet calls, plus the data movement between them. At this scale the cost is decided by how values are laid out and moved, and the program has to control that precisely to fit the budget. That control is what the generator provides.
 
 ### Why not SimplicityHL
 
@@ -40,7 +40,7 @@ We measured the same arithmetic both ways, with SimplicityHL 0.8.0 and the same 
 | one F_p product | 16,116 mWU | 32,492 (2.0x) | 18,440 (1.14x) |
 | 12-term dot product, one reduction | 116,744 mWU | 472,888 (4.1x) | 141,332 (1.21x) |
 
-Almost all of the verifier's work has the shape of the second row. Hand-tuned SimplicityHL would bring the verifier to about 440 M mWU, beyond the 400 kWU limit, and idiomatic SimplicityHL to several times the budget.
+Almost all of the verifier's work has the shape of the second row. Idiomatic SimplicityHL would make the verifier about four times as expensive, far beyond what its bytes pay for; hand-tuned SimplicityHL would add about 20%.
 
 The verifier also needs three things that a general compiler does not provide:
 
@@ -54,20 +54,19 @@ SimplicityHL remains a good fit for the contract around the verifier, for exampl
 
 The generator is a Python library, `groth/`, that writes the program as text in Simplicity's human-readable encoding; rust-simplicity parses that text (`deploy compile`). It follows four principles.
 
-1. **One description, two backends.** Each building block (a field product, a curve step, a step of the Miller loop) is written once against a small backend interface. The `Sym` backend (`sym.py`) turns the calls into Simplicity expressions and computes their exact cost. The `Num` backend runs the same calls on Python integers. The tests run both and check that the program computes exactly the model's numbers and costs exactly what the generator predicted.
+1. **One description, two backends.** Each building block (a field product, an on-curve check, a step of the Miller loop) is written once against a small backend interface. The `Sym` backend (`sym.py`) turns the calls into Simplicity expressions and computes their exact cost. The `Num` backend runs the same calls on Python integers. The tests run both and check that the program computes exactly the model's numbers and costs exactly what the generator predicted.
 2. **Explicit environments.** Values are bound with `let`, which adds them to the environment, or `scope`, which replaces the environment with just those values. Long computations are folded over balanced trees, so each step reads only its own data.
 3. **Static bounds.** Every field value carries an upper bound. Each operation computes the bound of its result and checks it against the limit of the arithmetic. When a sum would overflow, its operands are normalised first; if a bound still cannot be met, the build stops with an error.
-4. **Shared functions.** Repeated parts, such as a step of the Miller loop, are defined once as named functions and called with their data. This does not reduce cost, since every call executes, but it keeps the program at about 160 kB.
+4. **Shared functions.** Repeated parts, such as a step of the Miller loop, are defined once as named functions and called with their data. This does not reduce cost, since every call executes, but it keeps the program at about 60 kB.
 
 | module | what it builds |
 |---|---|
 | `dsl.py` | Simplicity text, balanced trees, witness files |
 | `sym.py` | the two backends and the cost model |
 | `fp.py` | BN254 field arithmetic |
-| `tower.py` | the extension fields F_p2, F_p6, F_p12 |
-| `curve.py` | curve steps, on-curve checks, the multi-scalar multiplication |
-| `miller.py` | the Miller loop and the G2 membership check |
-| `pairing.py` | the final check, without exponentiation |
+| `poly.py` | F_p12 as polynomials modulo w^12 - 18w^6 + 82 |
+| `curve.py` | on-curve checks, the multi-scalar multiplication |
+| `pairing.py` | the pairing check as one polynomial identity |
 | `groth16.py` | the whole verifier, transaction binding, padding |
 | `merkle.py` | the public-signal convention |
 | `bn254.py` | the plain-Python reference everything is tested against |
@@ -94,54 +93,76 @@ A sum of products is accumulated in both residues and reduced once, so a dot pro
 
 Words taken straight from the witness can be any 256-bit value. The jets reduce their inputs, so this is safe, and the program normalises such a word (multiplies it by the constant 1) before using it, which brings it below 1.3 p.
 
+Because words are not reduced, the program tests whether a value is zero by comparing it with the few multiples of p its bound allows.
+
 A product costs about 13 k mWU, and a reduction about 7.8 k.
 
-## Extension fields (tower.py)
+## F_p12 as polynomials (poly.py)
 
-Pairings work in F_p12, built in the usual tower: F_p2 = F_p[u]/(u² + 1), F_p6 = F_p2[v]/(v³ - (9 + u)), F_p12 = F_p6[w]/(w² - v). An element of F_p12 is a list of 12 F_p words.
-
-The main design choice is one reduction per output coefficient, the minimum. A product of two F_p12 elements is a sum of F_p products, each landing in one of the 12 output coefficients, sometimes negated and sometimes multiplied by 9 + u. The generator writes each output coefficient as one dot product with a single reduction. To keep every term a plain product, it prepares variants of the right operand in advance: negated coefficients, and coefficients already multiplied by 9 + u. Squarings merge the symmetric terms.
-
-Karatsuba multiplication was measured and rejected: it saves products but needs more reductions and negations than it saves.
-
-## Curve arithmetic (curve.py)
-
-Points are in affine coordinates, and the prover supplies the slope of every addition and doubling. Computing a slope normally needs a field inversion, which is expensive; checking a given slope needs only a multiplication:
+Pairings take values in F_p12. Its textbook construction is a tower of extensions: F_p2 = F_p[u]/(u^2 + 1), F_p6 = F_p2[v]/(v^3 - (9 + u)), F_p12 = F_p6[w]/(w^2 - v). The verifier uses the same field in a flat form. Since w^6 = v^3 = 9 + u, the element u is w^6 - 9, and u^2 = -1 becomes
 
 ```
-addition:  λ * (x2 - x1) = y2 - y1,  with x1 != x2
-doubling:  λ * 2y = 3x^2
+M(w) = w^12 - 18 w^6 + 82 = 0
 ```
 
-With x1 != x2 checked, each equation has exactly one solution, so a slope that passes is the true one and every step is the group law: the prover has no freedom. Without the x1 != x2 check, adding a point to itself would let any slope pass.
+So F_p12 = F_p[w]/M(w): an element is a polynomial of degree at most 11 with coefficients in F_p, and a product is the polynomial product reduced modulo M. F_p2 sits inside as the polynomials a0 + a1 (w^6 - 9). This is the representation py_ecc uses, and the tests check the map from the tower against it.
 
-Because words are not reduced, the program tests equality by checking that the difference of two words is one of the few multiples of p allowed by its bound.
+The flat form matters because a polynomial identity can be checked at a single point. If A B = C in F_p12, then A(w) B(w) = C(w) + Q(w) M(w) for a quotient polynomial Q, and at any number z this becomes one equation in F_p: A(z) B(z) = C(z) + Q(z) M(z). An F_p12 product, which costs about 1.6 M mWU when computed coefficient by coefficient, becomes one F_p product of two evaluations. The Frobenius maps π, π^2, π^3 are linear maps on the coefficients with one or two terms each.
 
-## Miller loop (miller.py)
+## The pairing check (pairing.py)
 
-The Miller loop computes the product of the Miller functions of three pairs, (-A, B), (L, γ) and (C, δ). It runs along the signed-binary (NAF) digits of 6x + 2, the loop length of BN254's optimal ate pairing, and ends with two extra additions by Frobenius images of each G2 point. That is 88 steps: 65 doublings and 23 additions. The three pairs advance in lockstep, so the accumulator f is squared once per step for all of them.
+The Groth16 equation e(A, B) = e(α, β) e(L, γ) e(C, δ) holds if and only if the product f of four Miller functions satisfies f^h = 1, h = (p^12 - 1)/r. The prover runs the Miller loop off-chain and writes every intermediate value into the witness. The program does not recompute the loop; it checks that every step of it holds, all at once, at one random point.
 
-Only B comes from the proof. Its steps use the prover's slopes, and the program computes its lines. γ and δ belong to the verifying key, so their slopes and lines are known when the program is generated and become constants: each step receives 36 data words for them.
+### The steps as relations
 
-Each line is used in affine form, `yP + (-λ * xP)·w + (λ * xT - yT) * v * w`. It differs from the textbook projective line by a factor in F_p2, which the final exponentiation would remove, so it gives the same pairing. The lines are multiplied in the order B, γ, δ, so that the line with the loosest bound meets the accumulator when its bound is smallest, and f is normalised once per step. The bounds that hold between steps are fixed points of one iteration; the generator finds them once with the numeric backend and checks them when it builds the program.
+The Miller loop runs along the signed-binary (NAF) digits of 6x + 2, the loop length of BN254's optimal ate pairing, and ends with two additions by Frobenius images of each G2 point: 88 steps, 65 doublings and 23 additions. The three pairs (-A, B), (L, γ) and (C, δ) advance in lockstep, so the accumulator f is squared once per step for all of them. The fourth pair, (α, β), belongs to the verifying key; its Miller value is a constant of the program.
 
-The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ^2(B), where ψ is the Frobenius map carried over to the twist. On G2, ψ acts as multiplication by p, and 6x + 2 + p - p^2 + p^3 is a multiple of the group order, so there T = -ψ^3(B). Off G2 the two differ: the rest of the twist is a cyclic group of square-free order, and the map [6x+2] + ψ - ψ^2 + ψ^3 sends none of its points except the identity to the identity (tests/test_g2_check.py checks one point of each prime order). Comparing T with -ψ^3(B) costs about 0.15 M mWU.
-
-A doubling step costs 3.6 M mWU, two thirds of it in its 261 field products. Alternatives that were measured and rejected: merging the lines before multiplying them in, a wider NAF (its extra Miller functions do not cancel), a loop along x instead of 6x + 2, and normalising B's coordinates.
-
-## Final check without exponentiation (pairing.py)
-
-The Groth16 equation holds if and only if the product of the Miller values, f, satisfies f^h = 1 with h = (p^12 - 1)/r. Computing that power, the final exponentiation, needs about 200 F_p12 squarings and products even with the usual shortcuts. The verifier avoids it with a residue witness ([Novakovic and Eagen, 2024](https://eprint.iacr.org/2024/640)). The prover supplies c in F_p12 and a 27th root of unity w with
+Each step multiplies f (squared, for a doubling) by three lines, one per pair, each of the form `yP + c3 xP w + c4 w^3` with c3 = -λ and c4 = λ xT - yT, where T is the pair's running G2 point and λ the slope of the step. The prover writes the new value f' into the witness, and the step becomes a relation between polynomials:
 
 ```
-f * w = c^λ,   λ = 6x + 2 + p - p^2 + p^3
+f^2 l_B l_γ l_δ - f' = 0   (mod M)
 ```
 
-Since r divides λ and 27 divides h, this equation implies f^h = 1, so checking it is enough.
+γ and δ belong to the key, so their slopes and lines are computed when the program is generated: each step receives c3 and c4 for both, four words each. B comes from the proof. The prover writes only B's slopes; B's points are never written down. The new point of a doubling is x' = λ^2 - 2x, y' = λ (x - x') - y, a polynomial in the slopes, and the program checks each slope instead:
 
-The check is cheap because its expensive part rides on the Miller loop. The loop starts with f = c^(-1) instead of 1 and multiplies f by c or c^(-1) at each addition step, so that the squarings it does anyway raise c to -(6x + 2). After the loop the program multiplies in π(c^(-1)), π^2(c) and π^3(c^(-1)); the Frobenius maps π are cheap. It then compares the result with (w * e(α, β))^(-1), where w is one of three constants selected by two witness bits and `e(α, β)` stands for the Miller value of the key's fixed pair, so that pair costs nothing. c and c⁻¹ both come from the witness, and the program checks that c * c^(-1) = 1.
+```
+doubling:  λ y - 3/2 x^2 = 0
+addition:  λ (xQ - x) - (yQ - y) = 0,   (xQ - x) d - 1 = 0
+```
 
-In total the residue witness adds about 51 M mWU: 42 M inside the loop (21 full F_p12 products) and 9 M before and after it.
+d is a prover-supplied inverse that proves xQ != x. With that, each slope equation has exactly one solution (y is never 0 on the twist), so a slope that passes is the true one and every step is the group law: the prover has no freedom. All of this F_p2 arithmetic is polynomial arithmetic modulo M too, since F_p2 sits inside F_p12, so these relations join the same identity.
+
+### No final exponentiation
+
+Computing f^h directly would take about 200 F_p12 squarings and products. The verifier uses a residue witness instead ([Novakovic and Eagen, 2024](https://eprint.iacr.org/2024/640)): the prover supplies c in F_p12 and a 27th root of unity w with
+
+```
+f w = c^λ,   λ = 6x + 2 + p - p^2 + p^3
+```
+
+Since r divides λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (w e(α, β))^(-1), one of three constants selected by two witness bits, and another checks c c^(-1) = 1.
+
+### B is in G2
+
+The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ^2(B), where ψ is the Frobenius map carried over to the twist. On G2, ψ acts as multiplication by p, and 6x + 2 + p - p^2 + p^3 is a multiple of the group order, so there T = -ψ^3(B). Off G2 the two differ: the rest of the twist is a cyclic group of square-free order, and the map [6x+2] + ψ - ψ^2 + ψ^3 sends none of its points except the identity to the identity (tests/test_g2_check.py checks one point of each prime order). Two relations compare T with -ψ^3(B).
+
+### One identity, checked at one point
+
+That makes 203 relations R_k, each a polynomial in w of degree at most 61. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (50 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
+
+```
+S(z) = Q(z) M(z)
+```
+
+This is randomized extension-field arithmetic: [Garaga](https://hackmd.io/@feltroidprime/B1eyHHXNT) checks each F_p12 product with its own quotient, and Novakovic and Eagen (section 6) combine all relations into one quotient, as here. Two things are specific to this verifier: the challenges come from SHA-256 inside the program, and B's F_p2 arithmetic is part of the same identity, so B's points never enter the witness.
+
+The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.61 M mWU, against 3.6 M for computing it in the tower.
+
+r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 203 values of r, and then S - Q M is a nonzero polynomial of degree at most 61, which vanishes at z with probability at most 61/p. A cheating prover must find a hash output in a set of relative size about 2^-246.
+
+The committed words are checked to be below 2^254 (their two top bits are zero), so that the 12-term dot products fit the bound of the field arithmetic; every canonical word passes. The program normalises the challenges, whose words are arbitrary 256-bit hashes.
+
+The witness grows to 45 kB, mostly the 88 committed Miller values, and the program shrinks to 61 kB, since the line data of γ and δ is now four words per pair and step instead of eighteen.
 
 ## Public input and transaction binding (curve.py, merkle.py, groth16.py)
 
@@ -151,9 +172,9 @@ To need only one, a circuit for this verifier exposes a single public signal: th
 
 ## Budget and padding (groth16.py)
 
-The program costs far more than its own bytes and the proof earn in budget, so the witness carries padding: blocks of 512 zero bytes, each earning 512 k mWU. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
+The program costs 81.7 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 61 kB program and the 45 kB witness already earn about 107 M mWU, and no padding is needed: the input weighs about 107 kWU.
 
-The result is a transaction of about 382 kWU, under the 400 kWU limit. Execution needs at most 3.5 M cells of Bit Machine memory, under the 5.2 M consensus cap.
+Programs that cost more than their bytes earn can still be padded. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks of 512 zero bytes go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
 
 ## Spending (tools/harness)
 

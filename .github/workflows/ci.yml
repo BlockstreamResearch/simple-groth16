@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/harness
+      - name: Build the harness
+        working-directory: tools/harness
+        run: cargo build --release --locked
+      - name: Field arithmetic
+        run: python3 tests/test_fp.py
+      - name: Extension fields
+        run: python3 tests/test_tower.py

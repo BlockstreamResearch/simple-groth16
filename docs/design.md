@@ -117,11 +117,13 @@ The Groth16 equation e(A, B) = e(α, β) e(L, γ) e(C, δ) holds if and only if 
 
 The Miller loop runs along the signed-binary (NAF) digits of 6x + 2, the loop length of BN254's optimal ate pairing, and ends with two additions by Frobenius images of each G2 point: 88 steps, 65 doublings and 23 additions. The three pairs (-A, B), (L, γ) and (C, δ) advance in lockstep, so the accumulator f is squared once per step for all of them. The fourth pair, (α, β), belongs to the verifying key; its Miller value is a constant of the program.
 
-Each step multiplies f (squared, for a doubling) by three lines, one per pair, each of the form `yP + c3 xP w + c4 w^3` with c3 = -λ and c4 = λ xT - yT, where T is the pair's running G2 point and λ the slope of the step. The prover writes the new value f' into the witness, and the step becomes a relation between polynomials:
+Each step multiplies f (squared, for a doubling) by three lines, one per pair, each of the form `yP + c3 xP w + c4 w^3` with c3 = -λ and c4 = λ xT - yT, where T is the pair's running G2 point and λ the slope of the step. When the prover writes the new value f' into the witness, the step becomes a relation between polynomials:
 
 ```
 f^2 l_B l_γ l_δ - f' = 0   (mod M)
 ```
+
+The prover does not commit after every step. Without a commitment, f' is the product itself, a polynomial of higher degree that the next relation carries along, and that next relation checks two steps at once. A committed value costs 12 witness words; a higher degree costs words of the quotient (below). The generator skips a commitment whenever the identity's degree stays within 211, the cap with the fewest words in total: 35 of the 88 Miller values are committed.
 
 γ and δ belong to the key, so their slopes and lines are computed when the program is generated: each step receives c3 and c4 for both, four words each. B comes from the proof. The prover writes only B's slopes; B's points are never written down. The new point of a doubling is x' = λ^2 - 2x, y' = λ (x - x') - y, a polynomial in the slopes, and the program checks each slope instead:
 
@@ -148,7 +150,7 @@ The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ
 
 ### One identity, checked at one point
 
-That makes 203 relations R_k, each a polynomial in w of degree at most 61. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (50 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
+That makes 150 relations R_k, each a polynomial in w of degree at most 211. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (200 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
 
 ```
 S(z) = Q(z) M(z)
@@ -156,13 +158,13 @@ S(z) = Q(z) M(z)
 
 This is randomized extension-field arithmetic: [Garaga](https://hackmd.io/@feltroidprime/B1eyHHXNT) checks each F_p12 product with its own quotient, and Novakovic and Eagen (section 6) combine all relations into one quotient, as here. Two things are specific to this verifier: the challenges come from SHA-256 inside the program, and B's F_p2 arithmetic is part of the same identity, so B's points never enter the witness.
 
-The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.61 M mWU, against 3.6 M for computing it in the tower.
+The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.39 M mWU, or 0.61 M with a commitment, against 3.6 M for computing it in the tower. Q(z) is evaluated eight coefficients at a time by one shared function, so its code is in the program once.
 
-r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 203 values of r, and then S - Q M is a nonzero polynomial of degree at most 61, which vanishes at z with probability at most 61/p. A cheating prover must find a hash output in a set of relative size about 2^-246.
+r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 150 values of r, and then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at most 211/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
 
 The committed words are checked to be below 2^254 (their two top bits are zero), so that the 12-term dot products fit the bound of the field arithmetic; every canonical word passes. The program normalises the challenges, whose words are arbitrary 256-bit hashes.
 
-The witness grows to 45 kB, mostly the 88 committed Miller values, and the program shrinks to 61 kB, since the line data of γ and δ is now four words per pair and step instead of eighteen.
+The witness is 30 kB: the committed Miller values (13 kB), the quotient (6 kB), B's slopes (6 kB) and the rest of the proof. The program is 60 kB; the line data of γ and δ, four words per pair and step, is 22 kB of it.
 
 ## Public input and transaction binding (curve.py, merkle.py, groth16.py)
 
@@ -172,7 +174,7 @@ To need only one, a circuit for this verifier exposes a single public signal: th
 
 ## Budget and padding (groth16.py)
 
-The program costs 81.7 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 61 kB program and the 45 kB witness already earn about 107 M mWU, and no padding is needed: the input weighs about 107 kWU.
+The program costs 68.5 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 60 kB program and the 30 kB witness already earn about 90 M mWU, and no padding is needed: the transaction weighs about 91 kWU.
 
 Programs that cost more than their bytes earn can still be padded. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks of 512 zero bytes go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
 

@@ -6,14 +6,21 @@ value after some of the steps (COMMIT) into the witness, and each step becomes a
 R(w) = 0 (mod M):
 
     doubling     f^2 l_B l_gamma l_delta - f',      lambda y - 3/2 x^2
-    addition     f g l_B l_gamma l_delta - f',      lambda (xQ - x) - (yQ - y),     (xQ - x) d - 1
+    addition     f g l'_B l_gamma l_delta - f',     lambda (xQ - x) - (yQ - y)
     at the end   x - x(-psi^3(B)),   y - y(-psi^3(B)),   f pi(c^-1) pi^2(c) pi^3(c^-1) - T_s,   c c^-1 - 1
 
 f, f' are the Miller values, g = c^-1 or c (the residue witness, as in Novakovic and Eagen),
 l the lines at P = -A, L, C.  Only B's slopes lambda are committed: x' = lambda^2 - 2x and
-y' = lambda (x - x') - y are polynomials in them.  A slope that satisfies its relation is the true one
-(y is never 0, and d, the inverse of xQ - x, proves xQ != x), so every step is the group law.  The last
-three relations are the G2 membership of B and the residue check; T_s = (W27^s e(alpha, beta))^-1.
+y' = lambda (x - x') - y are polynomials in them.  At an addition B's line is the line through T and Q,
+
+    l'_B = (xQ - x) l_B = (xQ - x) yP - (yQ - y) xP w + (x yQ - y xQ) w^3,
+
+which needs no slope.  A slope that satisfies its relation is the true one, so every step is the group
+law: y is never 0 (E' has no 2-torsion), and if xQ = x, the relation forces yQ = y, so l'_B = 0, every
+later Miller value is 0 and the residue check fails.  The factor xQ - x is in F_p2, whose elements are
+r-th powers in F_p12 (p^2 - 1 divides (p^12 - 1) / r), so the Miller value is an r-th power exactly
+when the product of the pairings is 1, as before (miller_values).  The last three relations are the G2
+membership of B and the residue check; T_s = (W27^s e(alpha, beta))^-1.
 After a step whose value is not committed, f' is the product itself, so the next relation carries a
 polynomial of higher degree; the first relation of a step is dropped then.
 
@@ -22,9 +29,9 @@ quotient Q = S / M.  The program evaluates everything at one point z and checks 
 multiplies only in F_p: an F_p12 product becomes one product of two evaluations.
 
 Soundness.  r is the SHA-256 of the public inputs, the proof and everything committed, and z the
-SHA-256 of r and Q.  If some R_k is not 0 modulo M, S is not 0 modulo M except for at most 150 values of
-r; then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at
-most 211 / p.  The program gets r and z as witness words and compares them with the two hashes at the
+SHA-256 of r and Q.  If some R_k is not 0 modulo M, S is not 0 modulo M except for at most 127 values of
+r; then S - Q M is a nonzero polynomial of degree at most 219, which vanishes at z with probability at
+most 219 / p.  The program gets r and z as witness words and compares them with the two hashes at the
 end.
 
 `relations` is written once over an abstract ring: the prover runs it on polynomials to get S and Q,
@@ -147,11 +154,15 @@ def relations(R, v, lines, table, commit=None):
             xq, yq = phi(pts[kind][0]), phi(pts[kind][1])
             dx = R.sub(xq, x)
             rels.append(R.sub(R.mul(lam, dx), R.sub(yq, y)))
-            rels.append(R.sub(R.mul(dx, phi(v['d'][i])), R.k(1)))
             x2 = R.sub(R.sub(R.mul(lam, lam), x), xq)
             f2 = R.mul(f, ci) if kind == 'A+' else R.mul(f, c) if kind == 'A-' else f
         m = R.sub(R.mul(lam, x), y) # lambda x - y, the c4 of B's line
-        lB = line(v['P'], R.sub(R.k(0), lam), m)
+        if kind == 'D':
+            lB = line(v['P'], R.sub(R.k(0), lam), m)
+        else: # (xQ - x) times the line: through T and Q, (xQ - x) yP - (yQ - y) xP w + (x yQ - y xQ) w^3
+            xP, yP = v['P']
+            lB = R.add(R.add(R.mul(R.k(yP), dx), R.mul(R.mul(R.k(xP), X), R.sub(y, yq))),
+                       R.mul(X3, R.sub(R.mul(x, yq), R.mul(y, xq))))
         lg = line(v['L'], phi(lines[0][i][0]), phi(lines[0][i][1]))
         ld = line(v['C'], phi(lines[1][i][0]), phi(lines[1][i][1]))
         f_next = R.mul(R.mul(R.mul(f2, lB), lg), ld)
@@ -187,7 +198,7 @@ def _shape(commit):
     """The number of relations and the degree of S (DegRing reads only the structure)."""
     z = bn254.Fp2(0)
     v = dict(P=(0, 0), B=bn254.G2_GEN, C=(0, 0), L=(0, 0), c=[0] * 12, ci=[0] * 12, s=0,
-             lam=[z] * N_STEPS, f=[[0] * 12] * N_STEPS, d={i: z for i in range(N_STEPS)})
+             lam=[z] * N_STEPS, f=[[0] * 12] * N_STEPS)
     rels = relations(DegRing, v, [[(z, z)] * N_STEPS] * 2, [[0] * 12] * 3, commit)
     return len(rels), max(rels)
 
@@ -203,10 +214,10 @@ def schedule(cap):
     return commit
 
 
-DEG_CAP = 211 # the cap with the fewest committed words: 36 Miller values, Q of 200 words (vs 88 and 50)
+DEG_CAP = 217 # the cap with the fewest committed words: 35 Miller values, Q of 208 words
 COMMIT = schedule(DEG_CAP)
-N_RELS, DEG_S = _shape(COMMIT) # 150 relations, degree 211
-N_Q = DEG_S - 11 # coefficients of Q
+N_RELS, DEG_S = _shape(COMMIT) # 127 relations, degree 217
+N_Q = -((11 - DEG_S) // 8) * 8 # coefficients of Q, at least DEG_S - 11, read in chunks of 8 (QCHUNK)
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -232,8 +243,34 @@ def blocks(n):
 
 
 def leaf_words(kind, commit):
-    """lambda (2 words), f' (12) if committed, d (2) for an addition."""
-    return 2 + 12 * commit + 2 * (kind in ADDS)
+    """lambda (2 words), f' (12) if committed."""
+    return 2 + 12 * commit
+
+
+def miller_values(pairs, c=None):
+    """The Miller value after each step of the loop, as the relations have it: from f = c^-1, times c^-1 / c
+    at the A+ / A- steps (from 1 and without them if c is None), and with B's line at an addition times
+    xQ - x.  That factor is in F_p2, so it does not change whether the value is an r-th power: it only
+    makes the line vanish when xQ = x."""
+    (nA, B), _, _ = pairs
+    lines = [[bn254.affine_line(cf, Pt) for _, cf in slopes(Q)] for Pt, Q in pairs]
+    lams = [lam for lam, _ in slopes(B)]
+    ci = c.inv() if c is not None else None
+    pts, T, f, out = step_points(B), B, (ci if c is not None else bn254.Fp12.one()), []
+    for i, kind in enumerate(STEPS):
+        lB = lines[0][i]
+        if kind == 'D':
+            f = f.square()
+        else:
+            dx = pts[kind][0] - T[0]
+            lB = tuple(dx * a for a in lB)
+            if c is not None:
+                f = f * ci if kind == 'A+' else f * c if kind == 'A-' else f
+        T, _ = bn254.affine_step(T, lams[i], pts[kind])
+        for ln in [lB] + [lines[k][i] for k in (1, 2)]:
+            f = f.mul_by_034(*ln)
+        out.append(f)
+    return out
 
 
 class Prover:
@@ -249,25 +286,13 @@ class Prover:
         """The witness, or None if the product of the pairings is not 1.  Tests may give the residue
         witness (c, s) and seal without checking the relations (seal)."""
         (nA, B), (L, _), (C, _) = pairs
-        res = residue or bn254.residue_witness(bn254.multi_miller_loop_affine(pairs) * self.const)
+        res = residue or bn254.residue_witness(miller_values(pairs)[-1] * self.const)
         if res is None:
             return None
         c, s = res
         ci = c.inv()
-        lams = [lam for lam, _ in slopes(B)]
-        lines = [[bn254.affine_line(cf, Pt) for _, cf in slopes(Q)] for Pt, Q in pairs]
-        pts, T, f, fs, ds = step_points(B), B, ci, [], {}
-        for i, kind in enumerate(STEPS): # the program's loop, from f = c^-1
-            if kind == 'D':
-                f = f.square()
-            else:
-                ds[i] = (pts[kind][0] - T[0]).inv()
-                f = f * ci if kind == 'A+' else f * c if kind == 'A-' else f
-            T, _ = bn254.affine_step(T, lams[i], pts[kind])
-            for k in range(3):
-                f = f.mul_by_034(*lines[k][i])
-            fs.append(poly.from_tower(f) if COMMIT[i] else None)
-        v = dict(P=nA, B=B, C=C, L=L, c=poly.from_tower(c), ci=poly.from_tower(ci), s=s, lam=lams, f=fs, d=ds)
+        fs = [poly.from_tower(f) if COMMIT[i] else None for i, f in enumerate(miller_values(pairs, c))]
+        v = dict(P=nA, B=B, C=C, L=L, c=poly.from_tower(c), ci=poly.from_tower(ci), s=s, lam=[lam for lam, _ in slopes(B)], f=fs)
         return self.seal(v, inputs, check)
 
     def seal(self, v, inputs, check=True):
@@ -277,8 +302,7 @@ class Prover:
         fp2 = lambda a: mont([a.c0, a.c1])
         nA, B, C = v['P'], v['B'], v['C']
         w = dict(points=mont([nA[0], nA[1], B[0].c0, B[0].c1, B[1].c0, B[1].c1, C[0], C[1]]), c=mont(v['c']), ci=mont(v['ci']), s=v['s'],
-                 leaves=[fp2(v['lam'][i]) + (mont(v['f'][i]) if COMMIT[i] else []) + (fp2(v['d'][i]) if i in v['d'] else [])
-                         for i in range(N_STEPS)])
+                 leaves=[fp2(v['lam'][i]) + (mont(v['f'][i]) if COMMIT[i] else []) for i in range(N_STEPS)])
         t = wbytes(inputs) + wbytes(w['points']) + s_byte(v['s']) + wbytes(w['c'] + w['ci']) + b''.join(map(wbytes, w['leaves']))
         w['r'] = int.from_bytes(hashlib.sha256(t).digest(), 'big')
         q, rem = poly.divmod_m(horner(PolyRing, relations(PolyRing, v, self.lines, self.table), from_mont(w['r'])))
@@ -396,7 +420,6 @@ class PairingCheck:
                 c[nm] = Val(run[nm], KB)
             if add:
                 c['xq'], c['yq'] = Val(args[0][0], KB), Val(args[0][1], KB)
-                c['d'] = [Val(w, WORD_MAX) for w in leaf[-1]]
                 if kind == 'A':
                     c['g'] = Val(args[0][2], KB)
             at_zeta = lambda c, a: rd([(a[1], c['zeta']), (a[0], one())]) # a0 + a1 zeta
@@ -406,16 +429,22 @@ class PairingCheck:
                 if commit:
                     f = c['f']
                     out.append(fp.normalize(rd([(f[0], one())] + [(f[k], c['zp'][k - 1]) for k in range(1, 12)])))
-                return out + ([at_zeta(c, c['d']), fp.sub(c['xq'], c['x'])] if add else [])
+                if add:
+                    ny = fp.neg(c['y'])
+                    out += [fp.sub(c['xq'], c['x']), fp.add(c['yq'], ny), rd([(c['x'], c['yq']), (ny, c['xq'])])]
+                return out
             minus_x3 = (lambda c: [(c['x'], m1()), (c['xq'], m1())]) if add else (lambda c: [(c['x'], fp.const(P - 2))])
-            steps = [('let', ['lam'] + (['e2'] if commit else []) + (['dz', 'dx'] if add else []), first),
-                     ('drop', ['l'] + (['f', 'zp'] if commit else []) + (['d'] if add else [])),
+            steps = [('let', ['lam'] + (['e2'] if commit else []) + (['dx', 'dy', 'k'] if add else []), first),
+                     ('drop', ['l'] + (['f', 'zp'] if commit else [])),
                      ('let', ['x2', 'm'], lambda c: [rd([(c['lam'], c['lam'])] + minus_x3(c)), rd([(c['lam'], c['x']), (c['y'], m1())])])]
 
             def final(c, _):
                 lam, m, x2 = c['lam'], c['m'], c['x2']
                 y2 = rd([(m, one()), (lam, fp.neg(x2))])
-                lB = rd([(c['nxpz'], lam), (c['z3'], m), (c['yp'], one())])
+                if add: # the line through T and Q, times xQ - x (relations)
+                    lB = rd([(c['yp'], c['dx']), (c['nxpz'], c['dy']), (c['z3'], c['k'])])
+                else:
+                    lB = rd([(c['nxpz'], lam), (c['z3'], m), (c['yp'], one())])
                 lg = rd([(c['yl'], one()), (c['xlz'], c['dg'][0]), (c['xlzz'], c['dg'][1]), (c['z3'], c['dg'][2]), (c['z3zeta'], c['dg'][3])])
                 ld = rd([(c['yc'], one()), (c['xcz'], c['dd'][0]), (c['xczz'], c['dd'][1]), (c['z3'], c['dd'][2]), (c['z3zeta'], c['dd'][3])])
                 if kind == 'D':
@@ -423,7 +452,7 @@ class PairingCheck:
                     rels = [rd([(lam, c['y']), (c['x'], fp.mul_const(c['x'], -THREE_HALVES))])]
                 else:
                     f2 = rd([(c['e'], c['g'])]) if kind == 'A' else c['e']
-                    rels = [rd([(lam, c['dx']), (c['yq'], m1()), (c['y'], one())]), rd([(c['dx'], c['dz']), (one(), m1())])]
+                    rels = [rd([(lam, c['dx']), (c['dy'], m1())])]
                 prod = rd([(rd([(f2, lB)]), lg)]) # times l_delta below
                 # Horner: acc r^n + the step's relations, the last one with weight 1
                 r_pow = lambda j: one() if j == 0 else c['r' if j == 1 else f'r{j}']
@@ -440,7 +469,7 @@ class PairingCheck:
                     b[nm + '_out'] = max(b.get(nm + '_out', 0), v.hi)
                 return fp.pack(outs)
             new = chain(fp, c, steps, final)
-            h2 = self.sha_add(h, [leaf[0]] + ([leaf[1][0], leaf[1][1]] if commit else []) + ([leaf[-1]] if add else []))
+            h2 = self.sha_add(h, [leaf[0]] + ([leaf[1][0], leaf[1][1]] if commit else []))
             out = be.pack([new, h2, be.subtree(list(run.values()))])
             return be.seq(be.checks([self.top2_zero(w) for w in fw]), out) if commit else out
         return body
@@ -466,7 +495,7 @@ class PairingCheck:
                 b[nm + '_out'] = 0
             for kind, n_args in (('D', 0), ('A', 3), ('F', 2)):
                 for commit in (False, True):
-                    leaf = [[0, 0]] + ([[[0] * 8, [0] * 4]] if commit else []) + ([[0, 0]] if n_args else [])
+                    leaf = [[0, 0]] + ([[[0] * 8, [0] * 4]] if commit else [])
                     self.step_body(kind, commit)([[st, leaf], [[0] * n_args, [0] * 8] if n_args else [0] * 8])
             self.qchunk_body([[[0, 0], [0] * 7], [0] * 8])
             names = ('e', 'acc', 'x', 'y', 'qz')
@@ -692,10 +721,10 @@ def bounds():
 
 # ---------------------------------------------------------------------------------------------------
 # The witness of the check: ((points, (c, c^-1)), ((s, (r, z)), (leaves, Q))).  c, c^-1: 8 + 4 words;
-# a leaf: (lambda, (f' 8 + 4 words)) or ((lambda, f'), d); Q in hashing blocks.
+# a leaf: lambda, or (lambda, (f' 8 + 4 words)); Q in hashing blocks.
 def leaf_shape(kind, commit):
-    """(lambda, f', d): f' (8 + 4 words) if committed, d for an addition."""
-    return [words(2)] + ([[words(8), words(4)]] if commit else []) + ([words(2)] if kind in ADDS else [])
+    """(lambda, f'): f' (8 + 4 words) if committed."""
+    return [words(2)] + ([[words(8), words(4)]] if commit else [])
 
 
 def witness_shape():
@@ -708,7 +737,7 @@ def witness_shape():
 def witness_type():
     T = lambda n: Tbalanced(['2^256'] * n)
     c = f'({T(8)} * {T(4)})'
-    leaf = lambda kind, commit: Tbalanced([T(2)] + ([c] if commit else []) + ([T(2)] if kind in ADDS else []))
+    leaf = lambda kind, commit: Tbalanced([T(2)] + ([c] if commit else []))
     leaves = Tbalanced([leaf(kind, COMMIT[k]) for k, kind in enumerate(STEPS)])
     return f'(({T(8)} * ({c} * {c})) * (((2 * 2) * {T(2)}) * ({leaves} * {Tbalanced([T(n) for n in blocks(N_Q)])})))'
 
@@ -722,7 +751,7 @@ def _split(w):
         parts = [lf[:2]]
         if COMMIT[k]:
             parts.append([lf[2:10], lf[10:14]])
-        return parts + ([lf[-2:]] if STEPS[k] in ADDS else [])
+        return parts
     qs, i = [], 0
     for n in blocks(N_Q):
         qs.append(w['q'][i:i + n])

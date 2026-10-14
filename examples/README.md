@@ -16,13 +16,13 @@ tools/harness/target/release/hand examples/fp_mul.simpl examples/fp_mul.w0.json 
 
 ## multiplier/
 
-The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending transaction) and the files of one spend on an Elements regtest node, transaction `511a3da3…`, which proves c = 21.
+The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending transaction) and the files of one spend on an Elements regtest node, transaction `71b20492…`, which proves c = 21.
 
 | file | |
 |---|---|
 | `verification_key.json` | the snarkjs key |
 | `verifier.simpl.gz` | the generated program, 1.1 MB of text |
-| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `e502d43b…47fb0d6b` |
+| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `55696695…935e9517` |
 | `proof.json`, `public.json` | the snarkjs proof and its public signal |
 | `leaves.json` | the two leaves behind the public signal: the transaction's sighash and c |
 | `verifier.w0.json.gz` | the witness: proof, Miller values, slopes, quotient, Merkle sibling |

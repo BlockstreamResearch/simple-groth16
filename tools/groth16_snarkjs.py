@@ -17,11 +17,11 @@ program of PROGRAM_BYTES bytes (`deploy spend` reports whether the budget is cov
 """
 import argparse, json, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B, miller as M, merkle
+from groth import fp as F, bn254 as B, pairing as PC, merkle
 from groth.groth16 import Groth16
 from groth.sym import Num
 
-PROGRAM_BYTES = 152000 # a pruned one-input verifier is about 154 kB; a low estimate only adds padding
+PROGRAM_BYTES = 60000 # a pruned one-input verifier is about 61 kB; a low estimate only adds padding
 
 
 def g1(pt):
@@ -108,7 +108,7 @@ def main():
     proof, inputs = load_proof(a.files[1]), load_public(a.files[2])
     assert len(inputs) == n, 'public signals'
     assert B.groth16_verify(vk, proof, inputs), 'the proof does not verify'
-    g = Groth16(F.Fp(Num()), vk, a.w, b=M.bounds(), pad_blocks=pad, depth=depth)
+    g = Groth16(F.Fp(Num()), vk, a.w, b=PC.bounds(), pad_blocks=pad, depth=depth)
     if depth:
         assert a.leaves, '--leaves is needed for a bound circuit'
         sibs = merkle.siblings([sighash] + values)

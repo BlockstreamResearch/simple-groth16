@@ -22,7 +22,9 @@ JET_COST = {
     'fe_multiply': 808, 'fe_square': 556, 'fe_add': 755, 'fe_negate': 531,
     'scalar_multiply': 774, 'scalar_square': 575, 'scalar_add': 739, 'scalar_negate': 490,
     'eq_256': 225, 'eq_64': 100, 'lt_64': 76, 'and_1': 79, 'or_1': 77, 'complement_1': 79, 'and_8': 91, 'verify': 57,
-    'sha_256_iv': 93, 'sha_256_block': 771, 'sha_256_ctx_8_init': 118, 'sha_256_ctx_8_add_512': 5299, 'sig_all_hash': 133,
+    'sha_256_iv': 93, 'sha_256_block': 771, 'sha_256_ctx_8_init': 118, 'sha_256_ctx_8_add_512': 5299,
+    'sha_256_ctx_8_add_1': 642, 'sha_256_ctx_8_add_32': 896, 'sha_256_ctx_8_add_64': 1187, 'sha_256_ctx_8_add_128': 1779,
+    'sha_256_ctx_8_add_256': 2912, 'sha_256_ctx_8_finalize': 835, 'sig_all_hash': 133,
 }
 SHA_CTX_W = 830 # width of the SHA-256 context type (buffer, counter, midstate)
 
@@ -148,7 +150,19 @@ class Sym:
 
     def const(self, bits, v):
         self._stat('const', 300 + bits)
-        return self.share(E(f'comp unit (const 0x{v:0{bits // 4}x})', bits, 300 + bits), 'k')
+        lit = f'0x{v:0{bits // 4}x}' if bits % 4 == 0 else f'0b{v:0{bits}b}'
+        return self.share(E(f'comp unit (const {lit})', bits, 300 + bits), 'k')
+
+    def consts(self, bits, values):
+        """comp unit (the constants, as a balanced tree).  They are created in an environment of their own:
+        under comp unit their source type is 1, so they must not share a node with the same constant
+        used elsewhere."""
+        self._push_env(0)
+        try:
+            packed = self.pack([self.const(bits, v) for v in values])
+        finally:
+            self._pop_env()
+        return self.comp(self.unit(), packed)
 
     def jet(self, name, arg, out_w):
         """comp arg jet_name"""

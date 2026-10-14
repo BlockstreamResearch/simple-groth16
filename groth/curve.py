@@ -22,7 +22,6 @@ from . import bn254
 from .dsl import ensure
 from .fp import Val, P, P_SECP, to_mont, mult_of_p_at_least, WORD_MAX
 from .sym import E, flat, is_sym
-from .tower import Tower
 
 R_ORDER = bn254.R
 THREE_HALVES = 3 * pow(2, -1, P) % P
@@ -132,7 +131,6 @@ class Curve:
     def __init__(self, fp):
         self.fp = fp
         self.be = fp.be
-        self.tw = Tower(fp)
 
     # F_p2 helpers on (x, y) tuples of Vals.  The sign variants a product needs (-b1, 2 a0) are used once,
     # so they stay inline; each operand component appears in two terms, which is fine for projections.
@@ -204,43 +202,6 @@ class Curve:
         be = self.be
         return Val(be.verify(be.not1(be.and1(self.is_eq_flag(a[0], b[0]), self.is_eq_flag(a[1], b[1])))), 0)
 
-    # G2 steps.  ctx: 'x', 'y' (normalised F_p2 tuples), 'lam' (the hint, any words), and for an addition
-    # 'qx', 'qy'.  Results: 'x2', 'y2' (normalised), 'c4' = lam x - y, 'lam' (normalised).  Only values
-    # used more than once are bound.
-    def g2_double_steps(self):
-        return [
-            ('let', ['lam'], lambda c: [self.norm2(c['lam'])]),
-            ('check', lambda c: self.eq2_check(self.mul2(c['lam'], c['y']), self.mul2_const(self.sqr2(c['x']), THREE_HALVES))),
-            ('let', ['x2'], lambda c: [self.norm2(self.sub2(self.sub2(self.sqr2(c['lam']), c['x']), c['x']))]),
-            ('let', ['c4'], lambda c: [self.sub2(self.mul2(c['lam'], c['x']), c['y'])]),
-            ('let', ['y2'], lambda c: [self.norm2(self.sub2(c['c4'], self.mul2(c['lam'], c['x2'])))]),
-        ]
-
-    def g2_add_steps(self):
-        return [
-            ('let', ['lam', 'dx'], lambda c: [self.norm2(c['lam']), self.sub2(c['qx'], c['x'])]),
-            ('check', lambda c: self.neq2_check(c['qx'], c['x'])),
-            ('check', lambda c: self.eq2_check(self.mul2(c['lam'], c['dx']), self.sub2(c['qy'], c['y']))),
-            ('let', ['x2'], lambda c: [self.norm2(self.sub2(self.sub2(self.sqr2(c['lam']), c['x']), c['qx']))]),
-            ('drop', ['dx', 'qy']),
-            ('let', ['c4'], lambda c: [self.sub2(self.mul2(c['lam'], c['x']), c['y'])]),
-            ('drop', ['qx']),
-            ('let', ['y2'], lambda c: [self.norm2(self.sub2(c['c4'], self.mul2(c['lam'], c['x2'])))]),
-        ]
-
-    def g1_add_const_steps(self):
-        """G1 addition with a table point.  ctx: 'x', 'y' (normalised), 'qx', 'qy', 'lam' (the hint);
-        results 'x2', 'y2' (normalised)."""
-        fp = self.fp
-        return [
-            ('let', ['lam', 'dx'], lambda c: [fp.normalize(c['lam']), fp.sub(c['qx'], c['x'])]),
-            ('check', lambda c: self.neq_check(c['qx'], c['x'])),
-            ('check', lambda c: self.eq_check(fp.reduce_dot([(c['lam'], c['dx'])]), fp.sub(c['qy'], c['y']))),
-            ('let', ['x2'], lambda c: [fp.normalize(fp.sub(fp.sub(fp.reduce_dot([(c['lam'], c['lam'])]), c['x']), c['qx']))]),
-            ('drop', ['dx', 'qy', 'qx']),
-            ('let', ['y2'], lambda c: [fp.normalize(fp.sub(fp.reduce_dot([(c['lam'], fp.sub(c['x'], c['x2']))]), c['y']))]),
-        ]
-
     # on-curve checks
     def g1_on_curve_check(self, x, y):
         """y^2 = x^3 + 3 for normalised x, y."""
@@ -293,7 +254,7 @@ class Curve:
         def tree(depth, prefix):
             if depth == w:
                 x, y = table[prefix]
-                return be.comp(be.unit(), be.pair(be.const(256, to_mont(x)), be.const(256, to_mont(y))))
+                return be.consts(256, [to_mont(x), to_mont(y)])
             l, r = tree(depth + 1, prefix << 1), tree(depth + 1, (prefix << 1) | 1)
             if depth + 1 < w:
                 l, r = be.drop(l), be.drop(r)
@@ -405,23 +366,10 @@ class Curve:
             hints.append(hi)
         return hints, acc
 
-    # prover side: slopes from bn254 points
-    @staticmethod
-    def g2_double_hint(T):
-        return bn254.affine_double_slope(T)
-
-    @staticmethod
-    def g2_add_hint(T, Q):
-        return bn254.affine_add_slope(T, Q)
-
     @staticmethod
     def g1_add_hint(Pt, Q):
+        """Prover side: the slope of the addition Pt + Q."""
         x1, y1 = Pt
         x2, y2 = Q
         assert x1 != x2
         return (y2 - y1) * pow(x2 - x1, -1, P) % P
-
-
-def fp2_hint_words(lam):
-    """A bn254.Fp2 slope as two Montgomery words."""
-    return [to_mont(lam.c0), to_mont(lam.c1)]

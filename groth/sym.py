@@ -1,0 +1,379 @@
+"""The two backends every generator is written against.
+
+`Sym` builds Simplicity expressions together with their exact static cost; `Num` computes the same
+thing on integers.  A generator calls the same methods on either one, so one piece of Python both
+writes the program and models it word for word; the tests compare the two.
+
+Costs follow rust-simplicity 0.9 (src/analysis.rs), in milliweight units (mWU):
+
+    iden: 100 + width(env)          unit: 100          take, drop, injl, injr: 100 + child
+    comp s t: 100 + width(mid) + s + t                 pair s t: 100 + s + t
+    case s t: 100 + max(s, t)       witness: 100 + width
+    jet: 100 + jet cost             const: 100 + width (300 + width as `comp unit (const w)`)
+
+The cost of a DAG is the cost of its tree unfolding: a shared node used twice runs twice.  Sharing only
+saves program bytes; a value needed twice must be bound into the environment (`let`, `scope`), and
+every copy of the environment costs its width, so environments are kept small.
+"""
+from .dsl import Emitter, balanced, balanced_paths, ensure, pairwise_sum
+
+# jet costs (mWU), as in rust-simplicity 0.9 and Elements 23.3; add a jet here before using it
+JET_COST = {
+    'fe_multiply': 808, 'fe_square': 556, 'fe_add': 755, 'fe_negate': 531,
+    'scalar_multiply': 774, 'scalar_square': 575, 'scalar_add': 739, 'scalar_negate': 490,
+    'eq_256': 225, 'eq_64': 100, 'lt_64': 76, 'and_1': 79, 'or_1': 77, 'complement_1': 79, 'and_8': 91, 'verify': 57,
+    'sha_256_iv': 93, 'sha_256_block': 771, 'sha_256_ctx_8_init': 118, 'sha_256_ctx_8_add_512': 5299, 'sig_all_hash': 133,
+}
+SHA_CTX_W = 830 # width of the SHA-256 context type (buffer, counter, midstate)
+
+
+class E:
+    """An expression: text, output width in bits, tree cost in mWU.  `path` (O/I letters) is set when the
+    expression is a plain projection of the environment, so that its components can be read directly."""
+    __slots__ = ('t', 'w', 'c', 'path')
+
+    def __init__(self, t, w, c, path=None):
+        self.t, self.w, self.c, self.path = t, w, c, path
+
+    def __repr__(self):
+        return f'E({self.t[:40]!r}, w={self.w}, c={self.c})'
+
+
+def words(n):
+    """Shape of n 256-bit words (for function, with_env, split)."""
+    return [E('', 256, 0) for _ in range(n)]
+
+
+def flat(v):
+    """Leaves of a nested list."""
+    return [v] if not isinstance(v, (list, tuple)) else [x for y in v for x in flat(y)]
+
+
+def is_sym(be):
+    return isinstance(be, Sym)
+
+
+class Sym:
+    """Builds E's over the current environment, kept as a stack of widths (changed by let/scope)."""
+
+    def __init__(self, env_width, em=None):
+        self.em = em or Emitter()
+        self.env = [env_width]
+        self.env_ids = [0] # a named node has one type, so texts are only shared within one environment
+        self.next_env_id = 1
+        self.stats = {} # rough cost attribution: kind -> (count, mWU); see report()
+
+    def _stat(self, kind, cost):
+        n, c = self.stats.get(kind, (0, 0))
+        self.stats[kind] = (n + 1, c + cost)
+
+    def report(self):
+        tot = sum(c for n, c in self.stats.values())
+        lines = [f'{k:20} {n:>7} {c:>12,}  {100 * c / tot:5.1f}%'
+                 for k, (n, c) in sorted(self.stats.items(), key=lambda kv: -kv[1][1])]
+        return '\n'.join(lines) + f'\n{"total":20} {"":>7} {tot:>12,}'
+
+    # sharing and environments
+    def share(self, e, prefix='n'):
+        """The named node of e (one per text and environment)."""
+        return E(self.em.share(f'{self.env_ids[-1]}|{e.t}', e.t, prefix), e.w, e.c)
+
+    def _push_env(self, width):
+        self.env.append(width)
+        self.env_ids.append(self.next_env_id)
+        self.next_env_id += 1
+
+    def _pop_env(self):
+        self.env.pop()
+        self.env_ids.pop()
+
+    def define(self, name, e, ty=None):
+        self.em.define(name, e.t, ty)
+        return E(name, e.w, e.c)
+
+    # core combinators
+    def iden(self):
+        w = self.env[-1]
+        self._stat('iden', 100 + w)
+        return E('iden', w, 100 + w)
+
+    def unit(self):
+        return E('unit', 0, 100)
+
+    def proj(self, path, width):
+        """The `width`-bit component of the environment at `path` (O/I letters, ending in H)."""
+        assert path.endswith('H')
+        t = 'iden'
+        for ch in reversed(path[:-1]):
+            t = ('take ' if ch == 'O' else 'drop ') + '(' + t + ')'
+        c = 100 * (len(path) - 1) + 100 + width
+        self._stat('read', c)
+        return E(t, width, c, path[:-1])
+
+    def sub(self, e, subpath, width):
+        """A component of a projected value (the paths are concatenated, no comp)."""
+        assert e.path is not None, 'sub-projection of a computed value'
+        return self.proj(e.path + subpath + 'H', width)
+
+    def bit(self, e, i):
+        """Bit i (0 = least significant) of a projected 256-bit word, as a value of type 2."""
+        assert e.w == 256
+        return self.sub(e, ''.join('O' if (255 - i) >> (7 - k) & 1 == 0 else 'I' for k in range(8)), 1)
+
+    def take(self, e):
+        return E(f'take ({e.t})', e.w, 100 + e.c, None if e.path is None else 'O' + e.path)
+
+    def drop(self, e):
+        self._stat('drop/take', 100)
+        return E(f'drop ({e.t})', e.w, 100 + e.c, None if e.path is None else 'I' + e.path)
+
+    def pair(self, a, b):
+        self._stat('pair', 100)
+        return E(f'pair ({a.t}) ({b.t})', a.w + b.w, 100 + a.c + b.c)
+
+    def pairs(self, *xs):
+        """Right-nested pairs."""
+        e = xs[-1]
+        for x in reversed(xs[:-1]):
+            e = self.pair(x, e)
+        return e
+
+    def comp(self, s, t):
+        self._stat('comp', 100 + s.w)
+        return E(f'comp ({s.t}) ({t.t})', t.w, 100 + s.w + s.c + t.c)
+
+    def case(self, l, r):
+        assert l.w == r.w
+        return E(f'case ({l.t}) ({r.t})', l.w, 100 + max(l.c, r.c))
+
+    def const(self, bits, v):
+        self._stat('const', 300 + bits)
+        return self.share(E(f'comp unit (const 0x{v:0{bits // 4}x})', bits, 300 + bits), 'k')
+
+    def jet(self, name, arg, out_w):
+        """comp arg jet_name"""
+        self._stat('jet ' + name, 100 + arg.w + 100 + JET_COST[name])
+        return self.share(E(f'comp ({arg.t}) (jet_{name})', out_w, 100 + arg.w + arg.c + 100 + JET_COST[name]))
+
+    def jet_at(self, name, path, out_w):
+        """A jet applied in place to the component of the environment at `path` (O/I letters): the jet
+        node is wrapped in take/drop, so its operands are neither copied nor passed through a comp."""
+        t = f'jet_{name}'
+        for ch in reversed(path):
+            t = ('take ' if ch == 'O' else 'drop ') + '(' + t + ')'
+        c = 100 * len(path) + 100 + JET_COST[name]
+        self._stat('jet@ ' + name, c)
+        return E(t, out_w, c)
+
+    def with_env(self, e, shape, body):
+        """comp e body: body(accessors) runs in the environment produced by e, structured like `shape`."""
+        self._push_env(e.w)
+        try:
+            accs = self._unpack('', shape)
+            res = body(accs)
+        finally:
+            self._pop_env()
+        return self.comp(e, res)
+
+    def crt_dot(self, pairs):
+        """Sum of products of (a, b) operand pairs in CRT form, as one 512-bit E (S mod p_s, S mod n_s).
+        The pairs are packed into a balanced tree, so each operand is read once; both multiplication jets
+        are then applied to every leaf in place (jet_at) and summed per modulus.  A pair (a, None) is a
+        square and uses the squaring jets."""
+        tree = self.pack([a if b is None else self.pair(a, b) for a, b in pairs])
+        paths = balanced_paths(len(pairs))
+        self._push_env(tree.w) # the sums live in the environment of the pair tree
+        try:
+            fe = pairwise_sum([self.jet_at('fe_square' if b is None else 'fe_multiply', p[:-1], 256)
+                               for p, (a, b) in zip(paths, pairs)], self.fe_add)
+            sc = pairwise_sum([self.jet_at('scalar_square' if b is None else 'scalar_multiply', p[:-1], 256)
+                               for p, (a, b) in zip(paths, pairs)], self.sc_add)
+        finally:
+            self._pop_env()
+        return self.comp(tree, self.pair(fe, sc))
+
+    # 256-bit jets: the interface fp.py uses
+    def fe_mul(self, a, b): return self.jet('fe_multiply', self.pair(a, b), 256)
+    def fe_sqr(self, a): return self.jet('fe_square', a, 256)
+    def fe_add(self, a, b): return self.jet('fe_add', self.pair(a, b), 256)
+    def fe_neg(self, a): return self.jet('fe_negate', a, 256)
+    def sc_mul(self, a, b): return self.jet('scalar_multiply', self.pair(a, b), 256)
+    def sc_sqr(self, a): return self.jet('scalar_square', a, 256)
+    def sc_add(self, a, b): return self.jet('scalar_add', self.pair(a, b), 256)
+    def sc_neg(self, a): return self.jet('scalar_negate', a, 256)
+    def word(self, v): return self.const(256, v)
+    def eq256(self, a, b): return self.jet('eq_256', self.pair(a, b), 1)
+    def or1(self, a, b): return self.jet('or_1', self.pair(a, b), 1)
+    def and1(self, a, b): return self.jet('and_1', self.pair(a, b), 1)
+    def not1(self, a): return self.jet('complement_1', a, 1)
+    def verify(self, bit): return self.jet('verify', bit, 0)
+    def lt64(self, a, b): return self.jet('lt_64', self.pair(a, b), 1)
+    def eq64(self, a, b): return self.jet('eq_64', self.pair(a, b), 1)
+
+    def checks(self, units):
+        """Several unit-typed checks as one unit-typed expression."""
+        return self.comp(self.pairs(*units), self.unit())
+
+    def check(self, e, hi):
+        """A bound assertion: only the numeric backend checks it."""
+        return e
+
+    # Environments.  A value passed to let/scope is an E or a nested list of values (packed as a
+    # balanced pair tree); the body gets accessors (projections) with the same nesting.
+    def pack(self, v):
+        """An E stays an E; a nested list becomes the balanced pair tree of its packed items."""
+        if isinstance(v, E):
+            return v
+        return balanced([self.pack(x) for x in v], self.pair)
+
+    def _unpack(self, prefix, v):
+        """Accessors for the value v placed at path prefix."""
+        if isinstance(v, E):
+            return self.proj(prefix + 'H', v.w)
+        paths = balanced_paths(len(v), prefix)
+        return [self._unpack(pth[:-1], x) for pth, x in zip(paths, v)]
+
+    def let(self, vals, body):
+        """Evaluate vals, then run body(accessors, lift) in the environment (vals, old env).  lift(e)
+        re-expresses an E of the old environment (cost 100 + e)."""
+        packed = self.pack(vals)
+        outer = self.iden()
+        self._push_env(packed.w + self.env[-1])
+        try:
+            accs = self._unpack('O', vals)
+            res = body(accs, self.drop)
+        finally:
+            self._pop_env()
+        return self.comp(self.pair(packed, outer), res)
+
+    def scope(self, vals, body):
+        """Evaluate vals, then run body(accessors) in an environment holding only them."""
+        packed = self.pack(vals)
+        self._push_env(packed.w)
+        try:
+            accs = self._unpack('', vals)
+            res = body(accs)
+        finally:
+            self._pop_env()
+        return self.comp(packed, res)
+
+    def once(self, es, body):
+        """body(es) with every computed expression of es evaluated once into a scope (projections and
+        constants are passed as they are; with none computed, body is called directly).  body may return
+        an E or a tuple of E's; a tuple is packed and each component projected out, which evaluates the
+        scope once per component."""
+        computed = [e for e in es if e.path is None and not e.t.startswith('k')]
+        if not computed:
+            return body(es)
+        results = {}
+
+        def inner(accs):
+            res = body(accs)
+            if isinstance(res, tuple):
+                results['parts'] = list(res)
+                return self.pack(list(res))
+            return res
+        whole = self.scope(list(es), inner)
+        if 'parts' not in results:
+            return whole
+        parts = results['parts']
+        out = []
+        for pth, part in zip(balanced_paths(len(parts)), parts):
+            self._push_env(whole.w)
+            try:
+                acc = self.proj(pth, part.w)
+            finally:
+                self._pop_env()
+            out.append(self.comp(whole, acc))
+        return tuple(out)
+
+    def call(self, fn, args):
+        """Apply a named function (an E whose text is its name) to args."""
+        return self.comp(self.pack(args), fn)
+
+    def function(self, name, shape, body):
+        """Define a named function over an environment structured like `shape` (E's of the right widths);
+        body(accessors) -> E."""
+        packed = self.pack(shape)
+        self._push_env(packed.w)
+        try:
+            accs = self._unpack('', shape)
+            res = body(accs)
+        finally:
+            self._pop_env()
+        return self.define(name, res)
+
+    def split(self, e, shape):
+        """Accessors, nested like `shape`, for the components of a projected value."""
+        assert e.path is not None, 'split of a computed value'
+        return self._unpack(e.path, shape)
+
+    def subtree(self, leaves):
+        """Projection of the smallest subtree holding the (nested) projected leaves."""
+        leaves = flat(leaves)
+        pre = leaves[0].path
+        for a in leaves[1:]:
+            while not a.path.startswith(pre):
+                pre = pre[:-1]
+        return self.proj(pre + 'H', sum(a.w for a in leaves))
+
+    def seq(self, chk, e):
+        """Run a unit-typed check, then return e: comp (pair chk e) (drop iden)."""
+        return self.comp(self.pair(chk, e), E('drop (iden)', e.w, 200 + e.w))
+
+
+class Num:
+    """The numeric backend: values are ints (256-bit words), nested lists stand for pairs, and the
+    environment operations pass values through."""
+    P_SECP = 2**256 - 2**32 - 977
+    N_SECP = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+
+    # the jets reduce any 256-bit input modulo their prime, as the C implementation does
+    def fe_mul(self, a, b): return a * b % self.P_SECP
+    def fe_sqr(self, a): return a * a % self.P_SECP
+    def fe_add(self, a, b): return (a + b) % self.P_SECP
+    def fe_neg(self, a): return (-a) % self.P_SECP
+    def sc_mul(self, a, b): return a * b % self.N_SECP
+    def sc_sqr(self, a): return a * a % self.N_SECP
+    def sc_add(self, a, b): return (a + b) % self.N_SECP
+    def sc_neg(self, a): return (-a) % self.N_SECP
+    def word(self, v): return v
+    def eq256(self, a, b): return int(a == b)
+    def or1(self, a, b): return a | b
+    def and1(self, a, b): return a & b
+    def not1(self, a): return 1 - a
+    def lt64(self, a, b): return int(a < b)
+    def eq64(self, a, b): return int(a == b)
+
+    def verify(self, bit):
+        ensure(bit == 1, 'verify failed')
+        return 0
+
+    def checks(self, units): return 0
+    def pair(self, a, b): return (a, b)
+
+    def check(self, v, hi):
+        ensure(0 <= v <= hi, f'value {v} exceeds bound {hi}')
+        return v
+
+    def pack(self, v): return v
+    def once(self, es, body): return body(es)
+    def bit(self, e, i): return (e >> i) & 1
+
+    def sub(self, e, path, w):
+        for ch in path:
+            e = e[0] if ch == 'O' else e[1]
+        return e
+
+    def let(self, vals, body): return body(list(vals), lambda e: e)
+    def scope(self, vals, body): return body(list(vals))
+    def with_env(self, e, shape, body): return body(e)
+    def function(self, name, shape, body): return body
+    def call(self, fn, args): return fn(args[0] if len(args) == 1 else list(args)) # a one-item pack is the item
+    def split(self, e, shape): return e
+    def subtree(self, leaves): return leaves
+    def seq(self, chk, e): return e
+
+    def crt_dot(self, pairs):
+        tot = sum(a * (a if b is None else b) for a, b in pairs)
+        return [tot % self.P_SECP, tot % self.N_SECP]

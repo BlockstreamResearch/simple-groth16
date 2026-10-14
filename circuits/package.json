@@ -1,0 +1,12 @@
+{
+  "name": "simple-groth-circuits",
+  "private": true,
+  "description": "circomlib (the SHA-256 templates) and snarkjs for the circuits of the Simplicity Groth16 verifier",
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "snarkjs": "^0.7.6"
+  },
+  "overrides": {
+    "underscore": "1.13.8"
+  }
+}

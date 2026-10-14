@@ -2,7 +2,7 @@
 
 A Groth16 verifier written on [Simplicity](https://github.com/BlockstreamResearch/simplicity). A proof made with [circom](https://docs.circom.io) and [snarkjs](https://github.com/iden3/snarkjs) can spend a Liquid TX output.
 
-> ⚠️ The library is highly experimental and has not been audited. Don't use it in production!
+> ⚠️ The library is highly experimental and has not been audited. Don't use it in production! To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## TL;DR
 

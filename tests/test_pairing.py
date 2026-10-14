@@ -57,12 +57,13 @@ def witness(L, w):
 def tampered(prover, w, how):
     """The honest values with one change, sealed again."""
     v = {k: (list(x) if isinstance(x, list) else dict(x) if isinstance(x, dict) else x) for k, x in w['values'].items()}
-    v['f'] = [list(f) for f in v['f']]
+    v['f'] = [None if f is None else list(f) for f in v['f']]
     add = next(i for i, k in enumerate(PC.STEPS) if k in PC.ADDS)
     if how == 'slope':
         v['lam'][10] = v['lam'][10] + 1
     elif how == 'Miller value':
-        v['f'][40][3] += 1
+        k = next(i for i in range(40, PC.N_STEPS) if PC.COMMIT[i])
+        v['f'][k][3] += 1
     elif how == 'inverse':
         v['d'][add] = v['d'][add] + 1
     elif how == 's':

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The G2 membership check (groth/pairing.py): after the loop, B's point at z must equal -psi^3(B) at z.
 For B on the twist, every other relation is made to hold: the Miller values are B's, the residue
-witness is c = 1, s = 0, and the constant of the check is chosen as the inverse of the Miller value.
+witness c is a fixed element, and the constant of the check is chosen so that the residue check holds:
+c^lambda times the inverse of the Miller value.
 So a point outside G2 can only fail on the two G2 relations.  B in G2 must pass; B plus a point of order
 10069, and a random point of the twist, must be rejected.
 
@@ -104,12 +105,14 @@ def main():
     cases = [('B in G2', good, True), ('B + order-10069 point', B.g2_add(good, small), False),
              ('random twist point', B.g2_random_point(rng), False)]
     b = PC.bounds()
+    c = B.Fp12(B.Fp6(B.Fp2(3, 1)), B.Fp6(B.Fp2(5, 2))) # any element outside F_p6
+    c_lam = c ** B.LAMBDA
     for label, Bq, in_g2 in cases:
         assert B.g2_on_curve(*Bq) and B.g2_in_subgroup(Bq) == in_g2
         pairs = [(A, Bq), (L, gamma), (C, delta)]
-        prover = PC.Prover(gamma, delta, B.multi_miller_loop_affine(pairs).inv())
-        w = prover.witness(pairs, [INPUT], residue=(B.Fp12.one(), 0), check=False)
-        rels = PC.relations(PC.PolyRing, w['values'], prover.lines, prover.table)
+        prover = PC.Prover(gamma, delta, c_lam * B.multi_miller_loop_affine(pairs).inv())
+        w = prover.witness(pairs, [INPUT], residue=(c, 0), check=False)
+        rels = PC.relations(PC.PolyRing, w['values'], prover.lines, prover.tau)
         failing = [k for k, rel in enumerate(rels) if any(poly.reduce(rel))]
         assert failing == ([] if in_g2 else [PC.N_RELS - 3, PC.N_RELS - 2]), (label, failing)
         text, estimate, _ = program(gamma, delta, prover.const, b)

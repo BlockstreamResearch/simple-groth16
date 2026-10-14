@@ -120,7 +120,7 @@ def main():
     g.verify(g.num_input(wit))
     with open(a.out + '.w0.json', 'w') as f:
         json.dump({'w_in': g.witness_value(wit)}, f)
-    print(f'wrote {a.out}.w0.json: the proof verifies (s = {wit["s"]}), {pad} padding blocks ({time.time() - t0:.0f}s)')
+    print(f'wrote {a.out}.w0.json: the proof verifies, {pad} padding blocks ({time.time() - t0:.0f}s)')
 
 
 if __name__ == '__main__':

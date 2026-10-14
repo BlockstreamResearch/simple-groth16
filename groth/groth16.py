@@ -141,9 +141,9 @@ class Groth16:
     def checks(self, accs):
         """The pairing check on (-A, B, C) and L from the MSM state, and the range checks of the inputs."""
         be, cv = self.be, self.cv
-        (x, y, scalars), (_, ((pts, (c, ci)), ((sel, rz), (leaves, q)))) = accs
+        (x, y, scalars), (_, ((pts, ac), (rz, (leaves, q)))) = accs
         L = (Val(x, MSM_X_HI), Val(y, MSM_Y_HI))
-        chk = self.pc.program({'L': L, 'words': scalars}, pts, c, ci, sel, rz, leaves, q)
+        chk = self.pc.program({'L': L, 'words': scalars}, pts, ac, rz, leaves, q)
         ranges = [cv.lt_const_check(Val(a, 0), R) for a in scalars]
         if not is_sym(be):
             return 0

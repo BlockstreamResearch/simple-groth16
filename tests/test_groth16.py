@@ -23,7 +23,7 @@ def main():
     g = Groth16(F.Fp(Num()), vk, w, b=bnd)
     t0 = time.time()
     wit = g.witness(proof, inputs)
-    print(f'witness in {time.time() - t0:.1f}s: s = {wit["s"]}, {len(wit["msm_hints"])} MSM slopes, {len(wit["leaves"])} leaves, {len(wit["q"])} words of Q')
+    print(f'witness in {time.time() - t0:.1f}s: {len(wit["msm_hints"])} MSM slopes, {len(wit["leaves"])} leaves, {len(wit["q"])} words of Q')
     assert g.witness((proof[0], proof[1], B.g1_add(proof[2], B.G1_GEN)), inputs) is None, 'a wrong proof has no witness'
     # numeric model
     g.verify(g.num_input(wit))

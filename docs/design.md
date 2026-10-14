@@ -123,7 +123,7 @@ Each step multiplies f (squared, for a doubling) by three lines, one per pair, e
 f^2 l_B l_γ l_δ - f' = 0   (mod M)
 ```
 
-The prover does not commit after every step. Without a commitment, f' is the product itself, a polynomial of higher degree that the next relation carries along, and that next relation checks two steps at once. A committed value costs 12 witness words; a higher degree costs words of the quotient (below). Every addition commits its value (most would anyway, and so one function serves all additions), and a doubling skips its commitment whenever the identity's degree stays within 211, the cap with the fewest words in total: 37 of the 88 Miller values are committed.
+The prover does not commit after every step. Without a commitment, f' is the product itself, a polynomial of higher degree that the next relation carries along, and that next relation checks two steps at once. A committed value costs 6 witness words (it is compressed, below); a higher degree costs words of the quotient. Every addition commits its value (most would anyway, and so one function serves all additions), and a doubling skips its commitment whenever the identity's degree stays within 216, the cap with the fewest words in total: 37 of the 88 Miller values are committed.
 
 γ and δ belong to the key, so their slopes and lines are computed when the program is generated: each step receives c3 and c4 for both, four words each. B comes from the proof. The prover writes only B's slopes; B's points are never written down. The new point of a doubling is x' = λ^2 - 2x, y' = λ (x - x') - y, a polynomial in the slopes, and the program checks each slope instead:
 
@@ -142,7 +142,21 @@ Computing f^h directly would take about 200 F_p12 squarings and products. The ve
 f w = c^λ,   λ = 6x + 2 + p - p^2 + p^3
 ```
 
-Since r divides λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (w e(α, β))^(-1), one of three constants selected by two witness bits, and another checks c c^(-1) = 1. The program evaluates π^n(c) at z as c(t_n(z)), by Horner's rule, which needs the two or three constants of t_n instead of the 45 of the Frobenius matrices. As polynomials, c(t_1) and c(t_3) have degree 77, so the last Miller value is committed to keep this relation within the degree cap.
+Since r divides λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (w e(α, β))^(-1). The program evaluates the Frobenius images at z by composition, π^n(a)(z) = a(t_n(z)), with Horner's rule, which needs the two or three constants of t_n instead of the 45 of the Frobenius matrices. As polynomials, these images have degree 70 for n = 1, 3, so the last Miller value is committed to keep this relation within the degree cap.
+
+### Miller values in the torus
+
+The relations are not about f itself but about u = E(f) = f^(p^6 - 1) = conj(f)/f, where conj, the Frobenius map π^6, sends w to -w. That is enough. E multiplies, commutes with π, and kills F_p6, so the residue check after E reads E(y) = c'^λ for the Miller value y of all four pairs and c' = E(c). Then y^h = E(y)^((p^6 + 1)/r) = (c'^(p^6 + 1))^(λ/r) = 1, because c' lies in the torus T2 = {u : u conj(u) = 1}, a cyclic group of order p^6 + 1. Conversely, gcd(λ/r, (p^6 + 1)/r) = 1, so an honest y always has such a c', E of Novakovic and Eagen's c.
+
+The torus makes the witness smaller. Every element of T2 other than 1 is (a + w)/(a - w) for a single a in F_p6, a = w (u + 1)/(u - 1), and an element of F_p6 is a polynomial in w^2: 6 coefficients instead of 12. So the prover commits a for each committed value and a_c for c'. The inverse of c' is its conjugate, (a_c - w)/(a_c + w), so c^(-1) leaves the witness. And 3 does not divide p^6 + 1, so the 27th root of unity w has E(w) = 1: the two selector bits and the table of three constants go, and the end relation compares with one constant τ = E(e(α, β))^(-1), compressed as well.
+
+The program keeps u as a fraction N/D of two polynomials:
+
+- A doubling squares both, and multiplies N by conj(L) and D by L, where L is the product of the three lines: E(L) = conj(L)/L.
+- An addition multiplies them by (a_c - w, a_c + w) or (a_c + w, a_c - w).
+- A committed value a gives the relation N (a - w) - D (a + w) = 0, and N and D start again from a + w and a - w.
+
+A line is yP + o with o its odd part (yP ∈ F_p is the even part), so its conjugate is yP - o. The program evaluates o once and gets both. N and D are never 0: every line has the nonzero constant term yP, and a ± w is not 0 because w is not in F_p6. Keeping two values instead of one costs each step about 50 k mWU, 4 M in all, and saves 7.4 kB of witness. (u = 1 has no compressed form; an honest prover meets it with probability about 1/p^6, and then fails.)
 
 ### B is in G2
 
@@ -150,7 +164,7 @@ The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ
 
 ### One identity, checked at one point
 
-That makes 129 relations R_k, each a polynomial in w of degree at most 211. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (200 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
+That makes 128 relations R_k, each a polynomial in w of degree at most 216. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q into the witness: 205 coefficients, padded with zeros to 208, a multiple of 8. The program then picks a point z, evaluates every polynomial at z, and checks
 
 ```
 S(z) = Q(z) M(z)
@@ -158,20 +172,20 @@ S(z) = Q(z) M(z)
 
 This is randomized extension-field arithmetic: [Garaga](https://hackmd.io/@feltroidprime/B1eyHHXNT) checks each F_p12 product with its own quotient, and Novakovic and Eagen (section 6) combine all relations into one quotient, as here. Two things are specific to this verifier: the challenges come from SHA-256 inside the program, and B's F_p2 arithmetic is part of the same identity, so B's points never enter the witness.
 
-The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.37 M mWU, or 0.58 M with a commitment, against 3.6 M for computing it in the tower. Q(z) is evaluated eight coefficients at a time by one shared function, so its code is in the program once.
+The program never multiplies in F_p12. A committed value a becomes the number a(z), a 6-term dot product with the even powers of z; a line becomes two numbers, at z and -z; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.45 M mWU, or 0.62 M with a commitment, against 3.6 M for computing it in the tower. Q(z) is evaluated eight coefficients at a time by one shared function, so its code is in the program once.
 
-r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 129 values of r, and then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at most 211/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
+r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, a_c and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 128 values of r, and then S - Q M is a nonzero polynomial of degree at most 219, which vanishes at z with probability at most 219/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
 
-The committed words are checked to be below 2^254 (their two top bits are zero), so that the 12-term dot products fit the bound of the field arithmetic; every canonical word passes. The program normalises the challenges, whose words are arbitrary 256-bit hashes.
+The committed words are checked to be below 2^254 (their two top bits are zero), so that the dot products fit the bound of the field arithmetic; every canonical word passes. The program normalises the challenges, whose words are arbitrary 256-bit hashes.
 
-The witness is 28 kB: the committed Miller values (14 kB), the quotient (6 kB), B's slopes (6 kB) and the rest of the proof. The program is 47 kB; the line data of γ and δ, four words per pair and step, is 22.5 kB of it.
+The witness is 21 kB: the committed values (7 kB), the quotient (7 kB), B's slopes (6 kB) and the rest of the proof. The program is 46 kB; the line data of γ and δ, four words per pair and step, is 22.5 kB of it.
 
 ### The size of the program
 
 Since the program earns more budget than it costs, the transaction's weight is its bytes, and the program is written to be small:
 
-- A constant of several words is one wide constant, a single node with all the bits, instead of a tree of 2n - 1 nodes: the line data of each step (8 words), each entry of the MSM tables (2 words), the rows of T_s (8 + 4 words).
-- Code that would repeat is a function: three step functions (a doubling with and without a commitment, an addition), Q(z) eight coefficients at a time, a(t) for 12 words by Horner's rule (c(z), c^(-1)(z), the three Frobenius images and T_s(z)), and the range check of 12 committed words. A function costs about 0.5 kB of code; the Frobenius additions run the addition's function with g = 1.
+- A constant of several words is one wide constant, a single node with all the bits, instead of a tree of 2n - 1 nodes: the line data of each step (8 words), each entry of the MSM tables (2 words), the constant τ (4 + 2 words).
+- Code that would repeat is a function: three step functions (a doubling with and without a commitment, an addition), Q(z) eight coefficients at a time, a(t) for an element of F_p6 by Horner's rule (a_c at z, t_1, t_2 and t_3, and τ at z), and the range check of 6 committed words. A function costs about 0.5 kB of code; the Frobenius additions run the addition's function with g = 1.
 - A function's intermediate values are pushed in front of its environment instead of being copied into a new one, so the values it only reads stay where they are.
 - The setup takes -ψ^3(B) from ψ(B) and the Frobenius images from t_n, as above: three constants where it held about fifty.
 
@@ -183,7 +197,7 @@ To need only one, a circuit for this verifier exposes a single public signal: th
 
 ## Budget and padding (groth16.py)
 
-The program costs 61.5 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 47 kB program and the 28 kB witness already earn about 75 M mWU, and no padding is needed: the transaction weighs about 76 kWU.
+The program costs 65.5 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 46 kB program and the 21 kB witness already earn about 67 M mWU, and no padding is needed: the transaction weighs about 68 kWU.
 
 Programs that cost more than their bytes earn can still be padded. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks of 512 zero bytes go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
 

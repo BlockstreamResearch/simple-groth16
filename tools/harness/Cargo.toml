@@ -24,3 +24,7 @@ serde_json = "1"
 [[bin]]
 name = "costs"
 path = "src/bin/costs.rs"
+
+[[bin]]
+name = "sizes"
+path = "src/bin/sizes.rs"

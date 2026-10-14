@@ -153,13 +153,24 @@ class Sym:
         lit = f'0x{v:0{bits // 4}x}' if bits % 4 == 0 else f'0b{v:0{bits}b}'
         return self.share(E(f'comp unit (const {lit})', bits, 300 + bits), 'k')
 
-    def consts(self, bits, values):
-        """comp unit (the constants, as a balanced tree).  They are created in an environment of their own:
-        under comp unit their source type is 1, so they must not share a node with the same constant
-        used elsewhere."""
+    def words_const(self, values, bits=256):
+        """Constant words as a balanced tree.  A power-of-two number of them is one wide constant: the same
+        type and value as the tree of words, in one program node instead of 2n - 1."""
+        n = len(values)
+        if n & (n - 1) == 0:
+            v = 0
+            for x in values:
+                v = (v << bits) | x
+            return self.const(bits * n, v)
+        return self.pack([self.const(bits, x) for x in values])
+
+    def consts(self, bits, groups):
+        """comp unit (groups of constant words, as a balanced tree of words_const).  They are created in an
+        environment of their own: under comp unit their source type is 1, so they must not share a node
+        with the same constant used elsewhere."""
         self._push_env(0)
         try:
-            packed = self.pack([self.const(bits, v) for v in values])
+            packed = self.pack([self.words_const(g, bits) for g in groups])
         finally:
             self._pop_env()
         return self.comp(self.unit(), packed)
@@ -235,10 +246,29 @@ class Sym:
     # Environments.  A value passed to let/scope is an E or a nested list of values (packed as a
     # balanced pair tree); the body gets accessors (projections) with the same nesting.
     def pack(self, v):
-        """An E stays an E; a nested list becomes the balanced pair tree of its packed items."""
+        """An E stays an E; a nested list becomes the balanced pair tree of its packed items, or, when its
+        leaves are exactly the leaves of one subtree of the environment, a projection of that subtree."""
         if isinstance(v, E):
             return v
+        sub = self._as_subtree(v)
+        if sub is not None:
+            return sub
         return balanced([self.pack(x) for x in v], self.pair)
+
+    def _as_subtree(self, v):
+        leaves = flat(v)
+        if len(leaves) < 2 or any(e.path is None for e in leaves):
+            return None
+        pre = leaves[0].path
+        for a in leaves[1:]:
+            while not a.path.startswith(pre):
+                pre = pre[:-1]
+        stats = dict(self.stats)
+        expected = flat(self._unpack(pre, v)) # the leaves a subtree at pre, shaped like v, would have
+        self.stats = stats
+        if [e.path for e in expected] != [e.path for e in leaves]:
+            return None
+        return self.proj(pre + 'H', sum(e.w for e in leaves))
 
     def _unpack(self, prefix, v):
         """Accessors for the value v placed at path prefix."""

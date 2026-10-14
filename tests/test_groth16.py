@@ -15,7 +15,7 @@ import harness
 
 def main():
     n = int(os.environ.get('INPUTS', '1'))
-    w = int(os.environ.get('W', '5'))
+    w = int(os.environ.get('W', '8'))
     vk, proof, inputs = B.groth16_instance(n, seed=int(os.environ.get('SEED', '7')))
     assert B.groth16_verify(vk, proof, inputs)
     bnd = PC.bounds()

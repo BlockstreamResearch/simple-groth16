@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verifier program from a snarkjs verification key, and witness from a snarkjs proof.
 
-    python3 tools/groth16_snarkjs.py program verification_key.json --out build/x [--values N] [--w 5] [--pad auto]
+    python3 tools/groth16_snarkjs.py program verification_key.json --out build/x [--values N] [--w 8] [--pad auto]
     python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public.json --out build/x [--leaves leaves.json]
 
 `program` writes x.simpl (then `deploy compile` makes x.uprog and `deploy address` the output to fund).
@@ -82,7 +82,7 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--values', type=int, default=0, help='public values of the circuit behind the Merkle root (0: no binding)')
     ap.add_argument('--leaves', help='the leaves of the proof (witness with --values)')
-    ap.add_argument('--w', type=int, default=5, help='MSM window width')
+    ap.add_argument('--w', type=int, default=8, help='MSM window width')
     ap.add_argument('--pad', default='auto', help='padding blocks of 512 bytes, or auto')
     a = ap.parse_args()
     vk = load_vk(a.files[0])

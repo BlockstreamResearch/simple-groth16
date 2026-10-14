@@ -46,7 +46,7 @@ class Groth16:
     window width in bits; b: pairing.bounds(); depth: depth of the public-signal Merkle tree (0: no
     transaction binding)."""
 
-    def __init__(self, fp, vk, w=5, nbits=254, b=None, pad_blocks=0, depth=0):
+    def __init__(self, fp, vk, w=8, nbits=254, b=None, pad_blocks=0, depth=0):
         self.fp, self.be = fp, fp.be
         self.cv = Curve(fp)
         self.vk, self.w, self.nbits, self.pad_blocks, self.depth = vk, w, nbits, pad_blocks, depth
@@ -202,7 +202,7 @@ class Groth16:
         return out
 
     @classmethod
-    def compile(cls, vk, w=5, pad_blocks=0, depth=0, b=None):
+    def compile(cls, vk, w=8, pad_blocks=0, depth=0, b=None):
         """The verifier of a key: (program text, its generator, cost bound in mWU)."""
         be = Sym(0)
         g = cls(Fp(be), vk, w, b=b or pairing.bounds(), pad_blocks=pad_blocks, depth=depth)

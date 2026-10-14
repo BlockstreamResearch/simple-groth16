@@ -2,8 +2,8 @@
 """The pairing check as one polynomial identity (groth/pairing.py), on an instance with
 e(A, B) e(L, gamma) e(C, delta) = 1.  The model's S(z) must equal Q(z) M(z), the program must accept,
 and it must reject witnesses that are wrong in one place but sealed consistently (r, Q and z
-recomputed), so that only the identity can catch them: a wrong slope, a wrong Miller value, a wrong
-inverse, a wrong s.  A wrong challenge and a false instance must be rejected too.
+recomputed), so that only the identity can catch them: a wrong slope, a wrong Miller value, a wrong s.
+A wrong challenge and a false instance must be rejected too.
 
     python3 tests/test_pairing.py
 """
@@ -58,14 +58,11 @@ def tampered(prover, w, how):
     """The honest values with one change, sealed again."""
     v = {k: (list(x) if isinstance(x, list) else dict(x) if isinstance(x, dict) else x) for k, x in w['values'].items()}
     v['f'] = [None if f is None else list(f) for f in v['f']]
-    add = next(i for i, k in enumerate(PC.STEPS) if k in PC.ADDS)
     if how == 'slope':
         v['lam'][10] = v['lam'][10] + 1
     elif how == 'Miller value':
         k = next(i for i in range(40, PC.N_STEPS) if PC.COMMIT[i])
         v['f'][k][3] += 1
-    elif how == 'inverse':
-        v['d'][add] = v['d'][add] + 1
     elif how == 's':
         v['s'] = (v['s'] + 1) % 3
     return prover.seal(v, [INPUT], check=False)
@@ -87,7 +84,7 @@ def main():
     S = PC.horner(R, PC.relations(R, w['values'], prover.lines, prover.table), r)
     assert S == poly.evaluate([F.from_mont(x) for x in w['q']], z) * poly.evaluate(poly.M, z) % P
     print(f'witness in {time.time() - t0:.1f}s: s = {w["s"]}, S(z) = Q(z) M(z)')
-    bad = [(how, tampered(prover, w, how)) for how in ('slope', 'Miller value', 'inverse', 's')]
+    bad = [(how, tampered(prover, w, how)) for how in ('slope', 'Miller value', 's')]
     wrong_r = dict(w); wrong_r['r'] ^= 1
     # numeric model
     b = PC.bounds()

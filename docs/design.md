@@ -129,10 +129,10 @@ The prover does not commit after every step. Without a commitment, f' is the pro
 
 ```
 doubling:  λ y - 3/2 x^2 = 0
-addition:  λ (xQ - x) - (yQ - y) = 0,   (xQ - x) d - 1 = 0
+addition:  λ (xQ - x) - (yQ - y) = 0
 ```
 
-d is a prover-supplied inverse that proves xQ != x. With that, each slope equation has exactly one solution (y is never 0 on the twist), so a slope that passes is the true one and every step is the group law: the prover has no freedom. All of this F_p2 arithmetic is polynomial arithmetic modulo M too, since F_p2 sits inside F_p12, so these relations join the same identity.
+Each slope equation has exactly one solution, so a slope that passes is the true one and every step is the group law: the prover has no freedom. For a doubling this is because y is never 0 (the twist has no points of order 2). For an addition it needs xQ != x, and that holds at every addition of the loop, for every point B of the twist, so the program does not check it. The twist's group of points is cyclic, of order r h with h = 10069 · 5864401 · 1875725156269 · (a 177-bit prime). At an addition, T = [k] B and Q = [q] B, with q = ±1 for the additions of ±B. For the Frobenius additions of ψ(B) and -ψ^2(B), q = μ and -μ^2, where μ is the eigenvalue by which ψ acts on each prime part of the group. T = Q needs an order of B that divides k - q, so some prime of r h that divides k - q, and tests/test_g2_check.py finds none for any of the 23 additions. (T = -Q makes the slope equation 0 = 2 yQ, which fails.) An earlier version had the prover supply an inverse d with (xQ - x) d - 1 = 0: 23 words of F_p2 and 23 relations, which this argument makes unnecessary. All of this F_p2 arithmetic is polynomial arithmetic modulo M too, since F_p2 sits inside F_p12, so these relations join the same identity.
 
 ### No final exponentiation
 
@@ -150,7 +150,7 @@ The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ
 
 ### One identity, checked at one point
 
-That makes 150 relations R_k, each a polynomial in w of degree at most 211. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (200 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
+That makes 127 relations R_k, each a polynomial in w of degree at most 211. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (200 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
 
 ```
 S(z) = Q(z) M(z)
@@ -160,11 +160,11 @@ This is randomized extension-field arithmetic: [Garaga](https://hackmd.io/@feltr
 
 The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.39 M mWU, or 0.61 M with a commitment, against 3.6 M for computing it in the tower. Q(z) is evaluated eight coefficients at a time by one shared function, so its code is in the program once.
 
-r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 150 values of r, and then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at most 211/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
+r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 127 values of r, and then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at most 211/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
 
 The committed words are checked to be below 2^254 (their two top bits are zero), so that the 12-term dot products fit the bound of the field arithmetic; every canonical word passes. The program normalises the challenges, whose words are arbitrary 256-bit hashes.
 
-The witness is 30 kB: the committed Miller values (13 kB), the quotient (6 kB), B's slopes (6 kB) and the rest of the proof. The program is 60 kB; the line data of γ and δ, four words per pair and step, is 22 kB of it.
+The witness is 28 kB: the committed Miller values (13 kB), the quotient (6 kB), B's slopes (6 kB) and the rest of the proof. The program is 60 kB; the line data of γ and δ, four words per pair and step, is 22 kB of it.
 
 ## Public input and transaction binding (curve.py, merkle.py, groth16.py)
 
@@ -174,7 +174,7 @@ To need only one, a circuit for this verifier exposes a single public signal: th
 
 ## Budget and padding (groth16.py)
 
-The program costs 68.5 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 60 kB program and the 30 kB witness already earn about 90 M mWU, and no padding is needed: the transaction weighs about 91 kWU.
+The program costs 66.7 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 60 kB program and the 28 kB witness already earn about 88 M mWU, and no padding is needed: the transaction weighs about 89 kWU.
 
 Programs that cost more than their bytes earn can still be padded. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks of 512 zero bytes go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
 

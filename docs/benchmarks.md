@@ -4,30 +4,30 @@ All costs are Simplicity's static cost bound in milliweight units (mWU), as rust
 
 ## One spend
 
-The toy circuit's verifier (one public signal bound to the transaction), spent on an Elements 23.3.1 regtest node in `511a3da3…`:
+The toy circuit's verifier (one public signal bound to the transaction), spent on an Elements 23.3.1 regtest node in `69a21870…`:
 
 | | |
 |---|---|
-| program cost | 68,491,902 mWU |
-| budget: (witness stack bytes + 50) x 1000 | 90,195,000 mWU, no padding needed |
-| pruned program | 60,346 bytes |
-| witness (proof, 35 Miller values, slopes, quotient, Merkle sibling) | 29,729 bytes |
-| transaction | 90,804 WU, 22,701 vB |
+| program cost | 66,733,221 mWU |
+| budget: (witness stack bytes + 50) x 1000 | 88,359,000 mWU, no padding needed |
+| pruned program | 59,982 bytes |
+| witness (proof, 35 Miller values, slopes, quotient, Merkle sibling) | 28,257 bytes |
+| transaction | 88,994 WU, 22,249 vB |
 | fee at 0.115 sat/vB, which Liquid testnet accepts | about 2,600 sat |
 
 ## Where the cost goes
 
 | part | mWU | share |
 |---|---:|---:|
-| the loop: 88 steps, each a few relations at z | 51,949,542 | 75.8% |
-| MSM of the public input: 51 windows of 5 bits | 8,645,785 | 12.6% |
-| end: the last relations, Q(z) (200 coefficients), the two hashes | 3,305,204 | 4.8% |
-| setup: on-curve checks, powers of z, c(z), the Frobenius images, the transcript header | 3,166,661 | 4.6% |
-| reading the witness, passing it between the parts | 1,398,414 | 2.0% |
+| the loop: 88 steps, each a few relations at z | 50,261,517 | 75.3% |
+| MSM of the public input: 51 windows of 5 bits | 8,645,585 | 13.0% |
+| end: the last relations, Q(z) (200 coefficients), the two hashes | 3,305,204 | 5.0% |
+| setup: on-curve checks, powers of z, c(z), the Frobenius images, the transcript header | 3,166,661 | 4.7% |
+| reading the witness, passing it between the parts | 1,327,958 | 2.0% |
 | transaction binding, range check | 26,296 | 0.0% |
-| total | 68,491,902 | |
+| total | 66,733,221 | |
 
-Of the loop, 43.8 M is in the steps and 8.2 M in folding the loop state over the witness: the state carries 33 per-run values (the powers of z, the points at z, r) to every step.
+Of the loop, 42.3 M is in the steps and 8.0 M in folding the loop state over the witness: the state carries 33 per-run values (the powers of z, the points at z, r) to every step.
 
 ## Where the bytes go
 
@@ -39,8 +39,7 @@ Of the loop, 43.8 M is in the steps and 8.2 M in folding the loop state over the
 | 35 committed Miller values | 13,440 |
 | quotient Q, 200 coefficients | 6,400 |
 | B's slopes, 88 steps | 5,632 |
-| inverses proving xQ != x, 23 additions | 1,472 |
-| MSM slopes, c, c^-1, the proof, the challenges | about 2,900 |
+| MSM slopes, c, c^-1, the proof, the challenges | about 2,800 |
 
 ## Building blocks
 
@@ -53,8 +52,8 @@ Of the loop, 43.8 M is in the steps and 8.2 M in folding the loop state over the
 | 12-term dot product, one reduction | 116,744 |
 | loop step: doubling (51 of them) | 385,831 |
 | loop step: doubling with a committed Miller value (14) | 608,873 |
-| loop step: addition with c or c^-1, committed (21) | 698,901 |
-| loop step: Frobenius addition (2) | 455,950 |
+| loop step: addition with c or c^-1, committed (21) | 633,646 |
+| loop step: Frobenius addition (2) | 394,395 |
 | Q(z): eight coefficients (25 calls) | 94,597 |
 | MSM window (select and add) | about 169,500 |
 
@@ -64,10 +63,10 @@ A doubling step evaluates B's slope and the three lines at z and adds its relati
 
 | | tower Miller loop (main) | one polynomial identity |
 |---|---:|---:|
-| program cost | 371.8 M mWU (with 414 padding blocks) | 68.5 M mWU |
+| program cost | 371.8 M mWU (with 414 padding blocks) | 66.7 M mWU |
 | pruned program | 161 kB | 60 kB |
-| witness | 220 kB (212 kB of it padding) | 30 kB |
-| transaction | 382.2 kWU, 95.6 kvB | 90.8 kWU, 22.7 kvB |
+| witness | 220 kB (212 kB of it padding) | 28 kB |
+| transaction | 382.2 kWU, 95.6 kvB | 89.0 kWU, 22.2 kvB |
 
 ## Time
 
@@ -96,7 +95,7 @@ python3 tests/test_groth16.py    # the whole verifier
 python3 tests/test_binding.py    # the verifier with the transaction binding
 ```
 
-`deploy spend` prints the cost, the sizes and the budget of a real transaction, and `tools/harness/target/release/costs <program.simpl>` the cost of every named definition of a program. The files in `examples/multiplier/` regenerate the program and the witness of the regtest spend `511a3da3…` byte for byte:
+`deploy spend` prints the cost, the sizes and the budget of a real transaction, and `tools/harness/target/release/costs <program.simpl>` the cost of every named definition of a program. The files in `examples/multiplier/` regenerate the program and the witness of the regtest spend `69a21870…` byte for byte:
 
 ```sh
 E=examples/multiplier
@@ -109,8 +108,8 @@ gunzip -c $E/verifier.simpl.gz | cmp - build/check.simpl && gunzip -c $E/verifie
 
 | network | transaction | what |
 |---|---|---|
-| Elements 23.3.1 regtest | `beba377d…` | the walkthrough (`tools/regtest.sh`): proof spend, 90,804 WU, vsize 22,701 |
-| Elements 23.3.1 regtest | `511a3da3…` | proof spend, the files in `examples/multiplier/` |
+| Elements 23.3.1 regtest | `f47584cd…` | the walkthrough (`tools/regtest.sh`): proof spend, 88,968 WU, vsize 22,242 |
+| Elements 23.3.1 regtest | `69a21870…` | proof spend, the files in `examples/multiplier/` |
 | Elements 23.3.1 regtest | a redirected proof | rejected with `Assertion failed inside jet` |
-| Elements 23.3.1 regtest | `5b6b46f1…` | the key path of the same leaf, 721 WU |
+| Elements 23.3.1 regtest | `2373f0d3…` | the key path of the same leaf, 721 WU |
 | Liquid testnet | [`f25a6e90…`](https://blockstream.info/liquidtestnet/tx/f25a6e90417c427f25c1d6883869825f30ec111a357b0e550bf24a20725d3cdb), block 2,659,534 | an earlier verifier (tower Miller loop, without the G2 check): 381,492 WU, fee 11,000 sat |

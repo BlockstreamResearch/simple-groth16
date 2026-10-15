@@ -25,10 +25,10 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 
 | | |
 |---|---|
-| program cost, one public signal | 65.5 M mWU |
-| transaction | 68.1 kWU, 17.0 kvB |
-| pruned program / witness | 46 kB / 21 kB |
-| fee at 0.115 sat/vB | ~ 2,000 sat |
+| program cost, one public signal | 61.5 M mWU |
+| transaction | 66.8 kWU, 16.7 kvB |
+| pruned program / witness | 45 kB / 21 kB |
+| fee at 0.115 sat/vB | ~ 1,900 sat |
 
 The program's bytes earn more budget than it costs, so it needs no padding. The transaction is about a sixth of the 400 kWU standard limit.
 

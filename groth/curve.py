@@ -264,10 +264,16 @@ class Curve:
             d = (word.e >> lo) & ((1 << w) - 1)
             x, y = table[d]
             return Val([to_mont(x), to_mont(y)], 0)
-        bits = [be.bit(word.e, lo + i) for i in range(w - 1, -1, -1)]
-        env = be.unit()
-        for b in reversed(bits):
-            env = be.pair(b, env)
+        if w & (w - 1) == 0 and lo % w == 0 and 256 % w == 0:
+            # the w bits are one aligned chunk of the word: project it once, and split it into its bits with a
+            # shared function, so that a window adds few nodes of its own
+            path = ''.join('O' if (255 - lo) >> (7 - k) & 1 == 0 else 'I' for k in range(8))[:8 - (w.bit_length() - 1)]
+            env = be.call(self.bits_fn(w), [be.sub(word.e, path, w)])
+        else:
+            bits = [be.bit(word.e, lo + i) for i in range(w - 1, -1, -1)]
+            env = be.unit()
+            for b in reversed(bits):
+                env = be.pair(b, env)
 
         # case s t : (A + B) x C -> D.  A bit is 1 + 1, so each branch sees (1, rest) and the next level
         # reads rest with `drop`.
@@ -281,6 +287,24 @@ class Curve:
             # named every few levels, so that no line of the program text is long (the parser is slow on those)
             return be.share(be.case(l, r)) if (w - depth) % 4 == 0 else be.case(l, r)
         return Val(be.comp(env, tree(0, 0)), 0)
+
+    def bits_fn(self, w):
+        """BITS<w>: a w-bit word -> its bits, most significant first, as (b, (b, ... (b, 1))), the input of a
+        case tree.  Defined once per program."""
+        be = self.be
+        fns = be.__dict__.setdefault('_bits_fns', {})
+        if w not in fns:
+            n = w.bit_length() - 1
+
+            def body(acc):
+                acc = acc[0] if isinstance(acc, list) else acc
+                env = be.unit()
+                for i in range(w): # least significant first, so that the most significant ends up outside
+                    pos = w - 1 - i
+                    env = be.pair(be.sub(acc, ''.join('I' if pos >> (n - 1 - k) & 1 else 'O' for k in range(n)), 1), env)
+                return env
+            fns[w] = be.function(f'BITS{w}', [E('', w, 0)], body)
+        return fns[w]
 
     def msm_window_steps(self, j, w, table):
         """One window: select the table point by the digit of scalar 's' and add it with hint 'lam'.

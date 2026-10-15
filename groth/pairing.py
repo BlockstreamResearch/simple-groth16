@@ -358,17 +358,27 @@ class Prover:
 # ---------------------------------------------------------------------------------------------------
 # The program
 #
-# The loop state is ((e, acc, x, y), h, run): e = f(z), acc the Horner sum of the relations so far,
-# (x, y) = B's point at z, h the SHA-256 context of the transcript, and the run values below, computed
-# once from z, r and the points.  zeta = z^6 - 9 is u at z; X, Y are the x, y of a point at zeta.
-Z_RUN = (1, 2, 3, 4, 5, 6, 7, 8, 10) # the powers of z the steps and Q(z) use
-RUN = ([f'z{k}' for k in Z_RUN] +
-       ['zeta', 'z3zeta', 'nxpz', 'yp', 'xlz', 'xlzz', 'yl', 'xcz', 'xczz', 'yc', 'r', 'r2', 'r3', 'cp', 'cm',
-        'XB', 'YB', 'nYB', 'X1', 'Y1', 'X2'])
-END = ['pn', 'npd'] # computed in the setup, used at the end only: the last relation is N pn + D npd
+# The loop state is (((N, D, acc, x, y), h), run): N / D = u at z, acc the Horner sum of the relations so
+# far, (x, y) = B's point at z, h the SHA-256 context of the transcript, and the run values below,
+# computed once from z, r and the points.  zeta = z^6 - 9 is the tower's u (u^2 = -1) at z; X, Y are the
+# x, y of a point at zeta.
+# The run values the step functions read, and the others (for the additions' arguments and the end).
+# A step function gets only the first, and the loop passes the second around it.
+# RUN_STEP is two subtrees: the values every step reads, and those only a committed step reads (the
+# powers of z for a(z), and r^2), so a step without a commitment gets the first alone.
+RUN_ANY = ['z3', 'zeta', 'z3zeta', 'nxpz', 'yp', 'xlz', 'xlzz', 'yl', 'xcz', 'xczz', 'yc', 'r']
+RUN_COMMIT = ['z1', 'z2', 'z4', 'z6', 'z8', 'z10', 'r2']
+RUN_STEP = RUN_ANY + RUN_COMMIT
+RUN_REST = ['cp', 'cm', 'XB', 'YB', 'X1', 'Y1']
+RUN = RUN_STEP + RUN_REST
+# computed in the setup, used at the end only, so they are not carried through the loop: the last
+# relation is N pn + D npd, and z^5, z^7 and r^3 are read by Q(z) and the end's Horner step
+END = ['pn', 'npd', 'z5', 'z7', 'r3']
 # (xQ, yQ, gN, gD): u times E(c^-1) = cm / cp at A+, E(c) = cp / cm at A-, 1 at the Frobenius additions.
-# -pi^2(B) = (omega x, y) for the cube root of unity omega = FROB2[2], so it shares YB.
+# -B = (XB, -YB), and -pi^2(B) = (omega XB, YB) for the cube root of unity omega = FROB2[2]: these two
+# are computed where they are used, from the run values (DERIVED: run value, constant factor).
 Q_KEYS = {'A+': ('XB', 'YB', 'cm', 'cp'), 'A-': ('XB', 'nYB', 'cp', 'cm'), 'F1': ('X1', 'Y1', None, None), 'F2': ('X2', 'YB', None, None)}
+DERIVED = {'nYB': ('YB', -1), 'X2': ('XB', bn254.FROB2[2].c0)}
 N_STATE = 5 # N, D, acc, x, y
 
 
@@ -388,10 +398,10 @@ class PairingCheck:
             self.sample_bounds()
         be = self.be
         self.TOP2 = be.function('TOP2', [words(4), words(2)], lambda a: be.checks([self.top2_zero(w) for w in flat(a)]))
-        st = self.state_shape()
         self.steps = {}
         for kind, args in (('D', None), ('A', words(4)), ('F', words(4))):
             for commit in sorted({COMMIT[k] for k in range(N_STEPS) if self.fn_of(k)[0] == kind}):
+                st = self.state_shape(run_rest=False, commit=commit)
                 shape = [[st, leaf_shape({'D': 'D', 'A': 'A+', 'F': 'F1'}[kind], commit)], words(8) if args is None else [args, words(8)]]
                 name = f'STEP_{kind}' + ('' if commit else '_')
                 self.steps[(kind, commit)] = be.function(name, shape, self.step_body(kind, commit))
@@ -410,6 +420,10 @@ class PairingCheck:
     def one(self): return self.fp.const(1)
     def m1(self): return self.fp.const(P - 1)
     def rd(self, pairs): return self.fp.reduce_dot(pairs)
+
+    def rd_plus(self, pairs, v):
+        """rd(pairs) + v: a term v 1 is added after the reduction, which saves its two products."""
+        return self.fp.add(self.rd(pairs), v)
 
     # hashing and the committed words
     def top2_zero(self, w):
@@ -449,23 +463,31 @@ class PairingCheck:
         return be.jet('sha_256_ctx_8_finalize', h, 256) if is_sym(be) else int.from_bytes(hashlib.sha256(h).digest(), 'big')
 
     # one step
-    def state_shape(self):
-        return [words(N_STATE), E('', SHA_CTX_W, 0), words(len(RUN))]
+    @staticmethod
+    def run_shape(commit=True):
+        """The shape of RUN_STEP, or of RUN_ANY alone."""
+        return [words(len(RUN_ANY)), words(len(RUN_COMMIT))] if commit else words(len(RUN_ANY))
+
+    def state_shape(self, run_rest=True, commit=True):
+        """((N, D, acc, x, y), h), (the run values); a step function's state has only RUN_STEP, or only
+        RUN_ANY if the step commits nothing."""
+        run = [self.run_shape(), words(len(RUN_REST))] if run_rest else self.run_shape(commit)
+        return [[words(N_STATE), E('', SHA_CTX_W, 0)], run]
 
     def step_body(self, kind, commit):
-        """Body of a step function: ((state, leaf), args) -> state.  Evaluates lambda and the lines at z and
-        -z, the next N and D, and a committed value at z, and adds the step's relations to acc in the order
-        of `relations`; absorbs the leaf into h."""
+        """Body of a step function: ((((N, D, acc, x, y), h), RUN_STEP values), leaf), args) -> ((N, D, acc,
+        x, y), h).  Evaluates lambda and the lines at z and -z, the next N and D, and a committed value at
+        z, and adds the step's relations to acc in the order of `relations`; absorbs the leaf into h."""
         fp, be, b = self.fp, self.be, self.b
         rd, one, m1 = self.rd, self.one, self.m1
         add = kind != 'D'
 
         def body(accs):
             (st, leaf), args = accs
-            (N, D, acc, x, y), h, run = st
+            ((N, D, acc, x, y), h), run = st
             aw = flat(leaf[1]) if commit else []
             data = args if kind == 'D' else args[1]
-            run = dict(zip(RUN, run))
+            run = dict(zip(RUN_STEP if commit else RUN_ANY, flat(run)))
             c = {'N': Val(N, b['N']), 'D': Val(D, b['D']), 'acc': Val(acc, b['acc']), 'x': Val(x, b['x']), 'y': Val(y, b['y']),
                  'l': [Val(w, WORD_MAX) for w in leaf[0]],
                  'dg': [Val(w, P - 1) for w in data[:4]], 'dd': [Val(w, P - 1) for w in data[4:]]}
@@ -530,7 +552,7 @@ class PairingCheck:
                 return fp.pack(outs)
             new = chain(fp, c, steps, final)
             h2 = self.sha_add(h, [leaf[0]] + ([leaf[1][0], leaf[1][1]] if commit else []))
-            out = be.pack([new, h2, be.subtree(list(run.values()))])
+            out = be.pack([new, h2])
             return be.seq(self.top2_6(leaf[1]), out) if commit else out
         return body
 
@@ -552,7 +574,8 @@ class PairingCheck:
         t2 = Val(t2, KB)
         acc = Val(a[5], F_HI)
         for k in range(4, -1, -1):
-            acc = self.rd([(acc, t2), (Val(a[k], F_HI), self.one())])
+            # the inner terms join after the reduction; the last one inside it, so that a(t) is reduced
+            acc = self.rd([(acc, t2), (Val(a[k], F_HI), self.one())]) if k == 0 else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
         self.eval_hi = acc.hi
         return acc.e
 
@@ -574,7 +597,7 @@ class PairingCheck:
         b = self.b
         names = ('N', 'D', 'acc', 'x', 'y', 'qz')
         b.update({nm: KB for nm in names})
-        st = [[0] * N_STATE, b'', [0] * len(RUN)]
+        st = [[[0] * N_STATE, b''], [0] * len(RUN_STEP)] # a step without a commitment reads the first len(RUN_ANY)
         for _ in range(30):
             for nm in names:
                 b[nm + '_out'] = 0
@@ -590,27 +613,40 @@ class PairingCheck:
         raise RuntimeError('no fixed point for the loop bounds')
 
     # the loop
-    def step_value(self, k, st, env):
+    def step_value(self, k, st, leaf):
+        """The state after step k: the step function on the state without RUN_REST, which is put back."""
         be = self.be
         kind = STEPS[k]
         data = be.words_const(self.data[k]) if is_sym(be) else self.data[k]
-        fk = self.fn_of(k)
-        fn = self.steps[fk]
+        fn = self.steps[self.fn_of(k)]
+        sub = be.subtree if is_sym(be) else (lambda v: v)
+        env = [[sub(st[0]), sub(st[1][0] if COMMIT[k] else st[1][0][0])], leaf]
         if kind == 'D':
-            return be.call(fn, [env, data])
-        run = dict(zip(RUN, st[2]))
-        args = [self.one().e if nm is None else be.subtree(run[nm]) if is_sym(be) else run[nm] for nm in Q_KEYS[kind]]
-        return be.call(fn, [env, [args, data]])
+            out = be.call(fn, [env, data])
+        else:
+            run = dict(zip(RUN, flat(st[1])))
+
+            def arg(nm):
+                if nm is None:
+                    return self.one().e
+                if nm in DERIVED:
+                    src, factor = DERIVED[nm]
+                    v = self.fp.mul_const(Val(run[src], KB), factor)
+                    ensure(v.hi <= KB, f'run value bound: {nm}')
+                    return v.e
+                return sub(run[nm])
+            out = be.call(fn, [env, [[arg(nm) for nm in Q_KEYS[kind]], data]])
+        return be.pack([out, sub(st[1])]) if is_sym(be) else [out, st[1]]
 
     def loop(self, state0, leaves):
         be = self.be
         if not is_sym(be):
             for k, leaf in enumerate(leaves):
-                state0 = self.step_value(k, state0, [state0, leaf])
+                state0 = self.step_value(k, state0, leaf)
             return state0
         widths = [256 * leaf_words(kind, COMMIT[k]) for k, kind in enumerate(STEPS)]
         return be.comp(be.pair(state0, leaves), fold_leaves(be, self.state_shape(), widths,
-                                                          lambda k: lambda accs: self.step_value(k, accs[0], be.iden())))
+                                                          lambda k: lambda accs: self.step_value(k, accs[0], accs[1])))
 
     # before the loop
     def setup(self, inputs, pts, ac, rz):
@@ -655,12 +691,11 @@ class PairingCheck:
 
         def final(c, checks):
             g1, g2 = bn254.FROB1, bn254.FROB2
-            vals = {f'z{k}': c[z(k)] for k in Z_RUN}
+            vals = {nm: c[z(int(nm[1:]))] for nm in RUN if nm[1:].isdigit()} # the powers of z
             vals.update({nm: c[nm] for nm in ('zeta', 'z3zeta', 'xlz', 'yl', 'xcz', 'r', 'r2', 'r3', 'XB', 'YB')})
             vals.update(nxpz=rd([(c['p'][0], c['nz'])]), yp=c['p'][1], xlzz=rd([(c['xlz'], c['zeta'])]),
-                        xczz=rd([(c['xcz'], c['zeta'])]), yc=c['p'][7], nYB=fp.mul_const(c['YB'], -1),
+                        xczz=rd([(c['xcz'], c['zeta'])]), yc=c['p'][7],
                         X1=at_zeta_conj(c, c['p'][2], c['p'][3], g1[2]), Y1=at_zeta_conj(c, c['p'][4], c['p'][5], g1[3]),
-                        X2=fp.mul_const(c['XB'], g2[2].c0),
                         cp=fp.add(c['acz'], c['z']), cm=fp.sub(c['acz'], c['z'])) # E(c) = cp / cm at z
             run = []
             for nm in RUN:
@@ -676,8 +711,13 @@ class PairingCheck:
             prod = lambda vs: rd([(rd([(rd([(vs[0], vs[1])]), vs[2])]), vs[3])])
             pn = prod([fp.sub(c['A1'], c['t1']), fp.add(c['A2'], c['t2']), fp.sub(A3, c['t3']), fp.sub(At, c['z'])])
             pd = prod([fp.add(c['A1'], c['t1']), fp.sub(c['A2'], c['t2']), fp.add(A3, c['t3']), fp.add(At, c['z'])])
-            end = [pn, fp.mul_const(pd, -1)]
+            ev = {nm: c[nm] if c[nm].hi <= KB else fp.normalize(c[nm]) for nm in ('z5', 'z7', 'r3')}
+            for nm, v in ev.items():
+                ensure(v.hi <= KB, f'end value bound: {nm}')
+            end = [pn, fp.mul_const(pd, -1), ev['z5'], ev['z7'], ev['r3']]
             end_hi.extend(v.hi for v in end)
+            n_any, n_step = len(RUN_ANY), len(RUN_STEP)
+            run = [[run[:n_any], run[n_any:n_step]], run[n_step:]]
             return be.seq(be.checks([ch.e for ch in checks]), be.pack([fp.pack([start, run]), fp.pack(end)]))
         out = chain(fp, ctx, steps, final)
         self.end_hi = end_hi
@@ -690,18 +730,19 @@ class PairingCheck:
         be = self.be
         if not is_sym(be):
             (start, run), end = out
-            return [[start, h, run], end]
-        shape = [[[words(N_STATE), words(len(RUN))], words(len(END))], E('', SHA_CTX_W, 0)]
+            return [[[start, h], run], end]
+        shape = [[[words(N_STATE), [self.run_shape(), words(len(RUN_REST))]], words(len(END))], E('', SHA_CTX_W, 0)]
         return be.with_env(be.pair(out, h), shape, lambda a: be.pack(
-            [[be.subtree(a[0][0][0]), a[1], be.subtree(a[0][0][1])], be.subtree(a[0][1])]))
+            [[[be.subtree(a[0][0][0]), a[1]], be.subtree(a[0][0][1])], be.subtree(a[0][1])]))
 
     # after the loop
     def final(self, state, end, q, rz):
         """The last three relations, S(z) = Q(z) M(z), and r, z against the two hashes."""
         fp, be, cv = self.fp, self.be, self.cv
         rd, one, m1 = self.rd, self.one, self.m1
-        (N, D, acc, x, y), h, run = state
-        run = {nm: Val(w, KB) for nm, w in zip(RUN, run)}
+        ((N, D, acc, x, y), h), run = state
+        run = {nm: Val(w, KB) for nm, w in zip(RUN, flat(run))}
+        run.update({nm: Val(w, KB) for nm, w in zip(END, end) if nm in ('z5', 'z7')})
         b = self.b
         chunks = [half for blk in q for half in ([blk] if len(blk) == 8 else [blk[:8], blk[8:]])]
         ensure(len(blocks(N_Q)) == len(q) and all(len(ch) == 8 for ch in chunks), 'Q is read in chunks of 8 words')
@@ -712,7 +753,7 @@ class PairingCheck:
         c = {'N': Val(N, b['N']), 'D': Val(D, b['D']), 'acc': Val(acc, b['acc']), 'x': Val(x, b['x']), 'y': Val(y, b['y']),
              'qz': Val(qz, b['qz'])}
         c.update({nm: Val(w, hi) for nm, w, hi in zip(END, end, self.end_hi)})
-        c.update({nm: run[nm] for nm in ('r', 'r2', 'r3', 'z6', 'X1', 'Y1')})
+        c.update({nm: run[nm] for nm in ('r', 'r2', 'z6', 'X1', 'Y1')})
 
         def horner_end(c):
             # -psi^3(B) = psi^2(psi(B)) negated, and psi^2 (x, y) = (omega x, -y): its point at zeta is (omega X1, Y1)

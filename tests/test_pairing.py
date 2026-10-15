@@ -41,13 +41,13 @@ def numeric(pc, xs, w):
 
 def program(delta, const, gt, b):
     """The check alone; witness (the input words, the check's witness), or the check's witness alone
-    without inputs."""
+    without inputs, and the check's witness nodes."""
     n = len(gt) - 1
     bits = 256 * n + PC.witness_bits(n)
     be = Sym(bits); fp = F.Fp(be)
     pc = PC.PairingCheck(fp, delta, const, gt, b)
-    inp, ((pts, ac), (rz, (leaves, q))) = be._unpack('', [words(n), PC.witness_shape(n)]) if n else ([], be._unpack('', PC.witness_shape(0)))
-    body = pc.program({'x': [F.Val(x, F.WORD_MAX) for x in inp], 'words': inp}, pts, ac, rz, leaves, q)
+    inp, ((pts, ac), rz) = be._unpack('', [words(n), PC.witness_shape(n)]) if n else ([], be._unpack('', PC.witness_shape(0)))
+    body = pc.program({'x': [F.Val(x, F.WORD_MAX) for x in inp], 'words': inp}, pts, ac, rz)
     wt = f'({Tbalanced(["2^256"] * n)} * {PC.witness_type(n)})' if n else PC.witness_type(0)
     be.em.define('w_in', 'witness', f'_ -> {wt}')
     be.em.define('main', f'comp w_in ({body.t})')
@@ -55,7 +55,8 @@ def program(delta, const, gt, b):
 
 
 def witness(xs, w):
-    return {'w_in': wpair(wbalanced([wv(256, x) for x in xs]), PC.witness_value(w)) if xs else PC.witness_value(w)}
+    main = wpair(wbalanced([wv(256, x) for x in xs]), PC.witness_value(w)) if xs else PC.witness_value(w)
+    return {'w_in': main, **PC.witness_nodes(w)}
 
 
 def tampered(prover, w, x, how):

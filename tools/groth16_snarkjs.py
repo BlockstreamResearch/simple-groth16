@@ -73,7 +73,7 @@ def load_leaves(path):
 def auto_pad(vk, depth):
     """Padding blocks from the unpadded program's cost and witness size."""
     _, g, cost = Groth16.compile(vk, 0, depth)
-    return Groth16.padding(cost, PROGRAM_BYTES, (g.witness_bits() + 7) // 8)
+    return Groth16.padding(cost, PROGRAM_BYTES, (g.all_witness_bits() + 7) // 8)
 
 
 def main():
@@ -119,7 +119,7 @@ def main():
     assert wit is not None
     g.verify(g.num_input(wit))
     with open(a.out + '.w0.json', 'w') as f:
-        json.dump({'w_in': g.witness_value(wit)}, f)
+        json.dump(g.witness_value(wit), f)
     print(f'wrote {a.out}.w0.json: the proof verifies, {pad} padding blocks ({time.time() - t0:.0f}s)')
 
 

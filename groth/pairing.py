@@ -689,22 +689,23 @@ class PairingCheck:
         return [words(len(RUN_ANY)), words(len(RUN_COMMIT))] if commit else words(len(RUN_ANY))
 
     def state_shape(self, run_rest=True, commit=True):
-        """((N, D, acc, x, y), h), (the run values); a step function's state has only RUN_STEP, or only
-        RUN_ANY if the step commits nothing."""
-        run = [self.run_shape(), words(len(self.run_rest))] if run_rest else self.run_shape(commit)
-        return [[words(N_STATE), E('', SHA_CTX_W, 0)], run]
+        """((N, D, acc, x, y), h), (the run values); a step function's state is (N, D, acc, x, y) and only
+        RUN_STEP, or only RUN_ANY if the step commits nothing."""
+        if run_rest:
+            return [[words(N_STATE), E('', SHA_CTX_W, 0)], [self.run_shape(), words(len(self.run_rest))]]
+        return [words(N_STATE), self.run_shape(commit)] # the step function: h is updated around it
 
     def step_body(self, kind, commit):
-        """Body of a step function: ((((N, D, acc, x, y), h), RUN_STEP values), leaf), args) -> ((N, D, acc,
-        x, y), h).  Evaluates lambda and the lines at z and -z, the next N and D, and a committed value at
-        z, and adds the step's relations to acc in the order of `relations`; absorbs the leaf into h."""
+        """Body of a step function: ((((N, D, acc, x, y), RUN_STEP values), leaf), args) -> (N, D, acc, x,
+        y).  Evaluates lambda and the lines at z and -z, the next N and D, and a committed value at z, and
+        adds the step's relations to acc in the order of `relations`.  The loop absorbs the leaf into h."""
         fp, be, b = self.fp, self.be, self.b
         rd, one, m1 = self.rd, self.one, self.m1
         add = kind != 'D'
 
         def body(accs):
             (st, leaf), args = accs
-            ((N, D, acc, x, y), h), run = st
+            (N, D, acc, x, y), run = st
             aw = flat(leaf[1]) if commit else []
             data = args if kind == 'D' else args[1]
             run = dict(zip(RUN_STEP if commit else RUN_ANY, flat(run)))
@@ -768,9 +769,7 @@ class PairingCheck:
                     b[nm + '_out'] = max(b.get(nm + '_out', 0), v.hi)
                 return fp.pack(outs)
             new = chain(fp, c, steps, final)
-            h2 = self.sha_add(h, [leaf[0]] + ([leaf[1][0], leaf[1][1]] if commit else []))
-            out = be.pack([new, h2])
-            return be.seq(self.top2_6(leaf[1]), out) if commit else out
+            return be.seq(self.top2_6(leaf[1]), new) if commit else new
         return body
 
     def qchunk_body(self, accs):
@@ -814,7 +813,7 @@ class PairingCheck:
         b = self.b
         names = ('N', 'D', 'acc', 'x', 'y', 'qz')
         b.update({nm: KB for nm in names})
-        st = [[[0] * N_STATE, b''], [0] * len(RUN_STEP)] # a step without a commitment reads the first len(RUN_ANY)
+        st = [[0] * N_STATE, [0] * len(RUN_STEP)] # a step without a commitment reads the first len(RUN_ANY)
         for _ in range(30):
             for nm in names:
                 b[nm + '_out'] = 0
@@ -830,14 +829,16 @@ class PairingCheck:
         raise RuntimeError('no fixed point for the loop bounds')
 
     # the loop
-    def step_value(self, k, st, leaf):
-        """The state after step k: the step function on the state without self.run_rest, which is put back."""
+    def step_value(self, k, st, leaf, data=None):
+        """The state after step k: the step function on the state without self.run_rest, which is put back.
+        data: the step's line constants of delta, if they are given (an accessor), else constants here."""
         be = self.be
         kind = STEPS[k]
-        data = be.words_const(self.data[k]) if is_sym(be) else self.data[k]
+        if data is None:
+            data = be.words_const(self.data[k]) if is_sym(be) else self.data[k]
         fn = self.steps[self.fn_of(k)]
         sub = be.subtree if is_sym(be) else (lambda v: v)
-        env = [[sub(st[0]), sub(st[1][0] if COMMIT[k] else st[1][0][0])], leaf]
+        env = [[sub(st[0][0]), sub(st[1][0] if COMMIT[k] else st[1][0][0])], leaf]
         if kind == 'D':
             out = be.call(fn, [env, data])
         else:
@@ -859,7 +860,10 @@ class PairingCheck:
             else:
                 q += [arg(nm) for nm in Q_KEYS[kind][2:]]
             out = be.call(fn, [env, [q, data]])
-        return be.pack([out, sub(st[1])]) if is_sym(be) else [out, st[1]]
+        # the transcript absorbs the leaf: lambda, and a if committed
+        lf = be.split(leaf, leaf_shape(kind, COMMIT[k])) if is_sym(be) else leaf
+        h2 = self.sha_add(st[0][1], [lf[0]] + ([lf[1][0], lf[1][1]] if COMMIT[k] else []))
+        return be.pack([[out, h2], sub(st[1])]) if is_sym(be) else [[out, h2], st[1]]
 
     def prod(self, vs):
         """The product of the values, as a balanced tree of products."""
@@ -876,9 +880,9 @@ class PairingCheck:
         c = {'b': [Val(w, P - 1) for w in bw], 'z': Val(z, KB), 'z2': Val(z2, KB), 'zeta': Val(zeta, KB), 'K': Val(k, KB)}
         steps = [('push', ['B1', 'B2'], lambda c: [self.rd_plus([(c['b'][1], c['zeta'])], c['b'][0]),
                                                   rd([(c['b'][3], c['zeta']), (c['b'][2], self.one())])]), # reduced: sigma - B2 is multiplied
-                 ('push', ['T', 'W'], lambda c: [rd([(c['z2'], c['B2'])]), rd([(c['B1'], c['B1'])])]),
-                 ('push', ['V'], lambda c: [rd([(c['T'], fp.add(c['B1'], c['T']))])]),
-                 ('push', ['S'], lambda c: [rd([(c['K'], c['z']), (c['W'], c['z']), (c['V'], c['z'])])])]
+                 ('push', ['T'], lambda c: [rd([(c['z2'], c['B2'])])]), # read twice below
+                 ('push', ['S'], lambda c: [rd([(c['K'], c['z']), (rd([(c['B1'], c['B1'])]), c['z']),
+                                                (rd([(c['T'], fp.add(c['B1'], c['T']))]), c['z'])])])]
 
         def final(c, _):
             out = [fp.add(c['S'], c['B2']), fp.sub(c['S'], c['B2'])]
@@ -922,14 +926,37 @@ class PairingCheck:
         return fp.scope(vals, body)
 
     def loop(self, state0, leaves):
+        """The state after the 88 steps.  Sym: each step reads its leaf from a witness node of its own
+        (LEAF_NAMES), so the leaves are not carried along: step k runs on (state, leaf k)."""
         be = self.be
         if not is_sym(be):
             for k, leaf in enumerate(leaves):
                 state0 = self.step_value(k, state0, leaf)
             return state0
-        widths = [256 * leaf_words(kind, COMMIT[k]) for k, kind in enumerate(STEPS)]
-        return be.comp(be.pair(state0, leaves), fold_leaves(be, self.state_shape(), widths,
-                                                          lambda k: lambda accs: self.step_value(k, accs[0], accs[1])))
+        shape = self.state_shape()
+        state_w = sum(e.w for e in flat(shape))
+        e, bodies = state0, {}
+        for k, kind in enumerate(STEPS):
+            w = 256 * leaf_words(kind, COMMIT[k])
+            leaf = be.witness(LEAF_NAMES[k], leaf_type(kind, COMMIT[k]), w)
+            if k in self.prover.plan: # a step with windows: its own code
+                be._push_env(state_w + w)
+                try:
+                    body = self.step_value(k, be._unpack('O', shape), be.proj('IH', w))
+                finally:
+                    be._pop_env()
+                e = be.comp(be.pair(e, leaf), body)
+            else: # the code of all steps of a kind, on ((state, leaf), the step's line constants)
+                key = (kind, COMMIT[k])
+                if key not in bodies:
+                    be._push_env(state_w + w + 1024)
+                    try:
+                        bodies[key] = be.share(self.step_value(k, be._unpack('OO', shape), be.proj('OIH', w), be.proj('IH', 1024)))
+                    finally:
+                        be._pop_env()
+                e = be.comp(be.pair(be.pair(e, leaf), be.words_const(self.data[k])), bodies[key])
+            e = be.share(e) # one line of the program text per step
+        return e
 
     # before the loop
     def setup(self, inputs, pts, ac, rz):
@@ -1063,47 +1090,31 @@ class PairingCheck:
             return 0
         return be.checks([identity, be.verify(be.eq256(r_hash, rz[0])), be.verify(be.eq256(z_hash, rz[1]))])
 
-    def program(self, inputs, pts, ac, rz, leaves, q):
+    def program(self, inputs, pts, ac, rz, leaves=None, q=None):
         """The whole check.  inputs: {'x': the public inputs (accessors or Vals), 'words': their words for the
-        transcript}; the rest as
-        in witness_shape().  Sym: a unit-typed E over the environment; Num: runs the checks."""
+        transcript}; pts, ac, rz as in witness_shape().  Sym: a unit-typed E over the environment, which
+        reads the leaves and Q from witness nodes of their own (witness_nodes); Num: runs the checks, on
+        the leaves and Q given."""
         be = self.be
         s0 = self.setup(inputs, pts, ac, rz)
         if not is_sym(be):
             st0, end = s0
             return self.final(self.loop(st0, leaves), end, q, rz)
-        lw = sum(256 * leaf_words(kind, COMMIT[k]) for k, kind in enumerate(STEPS))
-        qshape = [words(k) for k in blocks(self.prover.n_q)]
+        n_q = self.prover.n_q
+        qshape = [words(k) for k in blocks(n_q)]
         parts = {}
 
         def body(a):
-            (st0, end), (lv, (qa, rza)) = a
-            st = self.loop(be.subtree(st0), lv)
-            out = be.with_env(be.pack([st, be.subtree(end), be.subtree(qa), be.subtree(rza)]),
+            (st0, end), rza = a
+            st = self.loop(be.subtree(st0), None)
+            qa = be.witness(Q_NAME, q_type(n_q), 256 * n_q)
+            out = be.with_env(be.pack([st, be.subtree(end), qa, be.subtree(rza)]),
                               [self.state_shape(), words(len(END)), qshape, words(2)], lambda a: self.final(*a))
             parts.update(loop=st.c, final=out.c - st.c)
             return out
-        out = be.with_env(be.pack([s0, [be.subtree(leaves), [be.subtree(q), be.subtree(rz)]]]),
-                          [[self.state_shape(), words(len(END))], [E('', lw, 0), [qshape, words(2)]]], body)
+        out = be.with_env(be.pack([s0, be.subtree(rz)]), [[self.state_shape(), words(len(END))], words(2)], body)
         self.parts = {'setup': s0.c, **parts}
         return out
-
-
-def fold_leaves(be, state_shape, widths, step):
-    """Fold a state over the leaves of a balanced tree, of the given widths (as curve.fold_tree)."""
-    state_w = sum(e.w for e in flat(state_shape))
-
-    def go(lo, hi):
-        if hi - lo == 1:
-            be._push_env(state_w + widths[lo])
-            try:
-                return step(lo)((be._unpack('O', state_shape), be.proj('IH', widths[lo])))
-            finally:
-                be._pop_env()
-        mid = lo + (hi - lo + 1) // 2
-        inner = be.comp(be.pair(be.proj('OH', state_w), be.proj('IOH', sum(widths[lo:mid]))), go(lo, mid))
-        return be.comp(be.pair(inner, be.proj('IIH', sum(widths[mid:hi]))), go(mid, hi))
-    return go(0, len(widths))
 
 
 _BOUNDS = None
@@ -1120,30 +1131,46 @@ def bounds():
 
 
 # ---------------------------------------------------------------------------------------------------
-# The witness of the check: ((points, a_c), ((r, z), (leaves, Q))).  a_c and a committed value: 4 + 2 words;
-# a leaf: lambda, or (lambda, a); Q in hashing blocks.
+# The witness of the check: ((points, a_c), (r, z)) in the program's witness, and witness nodes of their
+# own for each step's leaf (lambda, or lambda and a) and for Q, in hashing blocks.  a_c and a committed
+# value: 4 + 2 words.  The numeric backend takes all of it as one value (witness_num).
+LEAF_NAMES = [f'wl{k}' for k in range(N_STEPS)]
+Q_NAME = 'wq'
+
+
 def leaf_shape(kind, commit):
     """(lambda, a): a (4 + 2 words) if committed."""
     return [words(2)] + ([[words(4), words(2)]] if commit else [])
 
 
+def _T(n):
+    return Tbalanced(['2^256'] * n)
+
+
+def leaf_type(kind, commit):
+    return Tbalanced([_T(2)] + ([f'({_T(4)} * {_T(2)})'] if commit else []))
+
+
+def q_type(n_q):
+    return Tbalanced([_T(k) for k in blocks(n_q)])
+
+
 def witness_shape(n=1):
-    """For n public inputs (Q's size depends on them)."""
-    n_q = q_words(window_plan(n)[0])
-    leaves = [leaf_shape(kind, COMMIT[k]) for k, kind in enumerate(STEPS)]
-    return [[words(8), [words(4), words(2)]], [words(2), [leaves, [words(k) for k in blocks(n_q)]]]]
+    """The part of the program's witness (any number of public inputs)."""
+    return [[words(8), [words(4), words(2)]], words(2)]
 
 
 def witness_type(n=1):
-    T = lambda n: Tbalanced(['2^256'] * n)
-    a = f'({T(4)} * {T(2)})'
-    leaf = lambda kind, commit: Tbalanced([T(2)] + ([a] if commit else []))
-    leaves = Tbalanced([leaf(kind, COMMIT[k]) for k, kind in enumerate(STEPS)])
-    return f'(({T(8)} * {a}) * ({T(2)} * ({leaves} * {Tbalanced([T(k) for k in blocks(q_words(window_plan(n)[0]))])})))'
+    return f'(({_T(8)} * ({_T(4)} * {_T(2)})) * {_T(2)})'
 
 
 def witness_bits(n=1):
-    return 256 * (8 + 6 + 2 + q_words(window_plan(n)[0]) + sum(leaf_words(kind, COMMIT[k]) for k, kind in enumerate(STEPS)))
+    return 256 * (8 + 6 + 2)
+
+
+def witness_node_bits(n=1):
+    """The bits of the witness nodes of their own: the leaves and Q (whose size depends on n)."""
+    return 256 * (q_words(window_plan(n)[0]) + sum(leaf_words(kind, COMMIT[k]) for k, kind in enumerate(STEPS)))
 
 
 def _split(w):
@@ -1157,16 +1184,23 @@ def _split(w):
 
 
 def witness_num(w):
-    """The witness as the nested value the numeric backend takes."""
+    """The witness as the nested value the numeric backend takes: ((points, a_c), ((r, z), (leaves, Q)))."""
     pts, ac, leaves, qs = _split(w)
     return [[pts, ac], [[w['r'], w['z']], [leaves, qs]]]
 
 
 def witness_value(w):
-    """The witness as a harness value spec (tools/harness)."""
-    pts, ac, leaves, qs = _split(w)
+    """The part of the program's witness as a harness value spec (tools/harness)."""
+    pts, ac, _, _ = _split(w)
     W = lambda ws: wbalanced([wv(256, x) for x in ws])
-    pair2 = lambda a: wpair(W(a[0]), W(a[1]))
-    leaf = lambda lf: balanced([W(lf[0])] + [pair2(x) for x in lf[1:]], wpair)
-    return wpair(wpair(W(pts), pair2(ac)),
-                 wpair(W([w['r'], w['z']]), wpair(wbalanced([leaf(lf) for lf in leaves]), wbalanced([W(x) for x in qs]))))
+    return wpair(wpair(W(pts), wpair(W(ac[0]), W(ac[1]))), W([w['r'], w['z']]))
+
+
+def witness_nodes(w):
+    """The values of the witness nodes of their own, by name."""
+    _, _, leaves, qs = _split(w)
+    W = lambda ws: wbalanced([wv(256, x) for x in ws])
+    leaf = lambda lf: balanced([W(lf[0])] + [wpair(W(x[0]), W(x[1])) for x in lf[1:]], wpair)
+    out = {nm: leaf(lf) for nm, lf in zip(LEAF_NAMES, leaves)}
+    out[Q_NAME] = wbalanced([W(x) for x in qs])
+    return out

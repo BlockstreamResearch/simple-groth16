@@ -5,9 +5,12 @@ The program checks e(-A, B) e(C, delta) e(alpha, beta) e(L, gamma) = 1 as one po
 value of (alpha, beta) the constant of the final relation, and the IC points with gamma the tables of the
 public inputs' term: e(L, gamma) = e(IC_0, gamma) prod e(IC_i, gamma)^(a_i), so L is never computed.
 
-The witness, the field words in Montgomery form (x R mod p, R = 2^256 - 2^32 - 977):
+The witness, the field words in Montgomery form (x R mod p, R = 2^256 - 2^32 - 977): the program's
+witness node w_in holds
 
     (public inputs, the check's witness (pairing.witness_shape))
+
+and the pairing check reads each step's leaf and Q from witness nodes of their own (pairing.witness_nodes).
 
 -A is given instead of A, so the program negates nothing.  `witness` computes everything from a proof.
 The public inputs are range-checked (a_i < r).
@@ -91,15 +94,20 @@ class Groth16:
         return Tbalanced([parts[p]() for p in self._parts()])
 
     def witness_bits(self):
+        """The bits of the program's witness node, w_in."""
         return 256 * (self.n + self.depth) + pairing.witness_bits(self.n) + 4096 * self.pad_blocks
 
+    def all_witness_bits(self):
+        """With the witness nodes of their own (the pairing check's leaves and Q)."""
+        return self.witness_bits() + pairing.witness_node_bits(self.n)
+
     def witness_value(self, wit):
-        """The witness dict as a harness value spec (tools/harness)."""
+        """The witness dict as harness value specs (tools/harness), by witness node: w_in, the leaves and Q."""
         W = lambda ws: wbalanced([wv(256, x) for x in ws])
         main = wpair(W(wit['scalars']), pairing.witness_value(wit))
         parts = dict(main=lambda: main, siblings=lambda: W(wit['siblings']),
                      pad=lambda: wbalanced([wbalanced([wv(512, 0)] * 8) for _ in range(self.pad_blocks)]))
-        return wbalanced([parts[p]() for p in self._parts()])
+        return {'w_in': wbalanced([parts[p]() for p in self._parts()]), **pairing.witness_nodes(wit)}
 
     def witness_shape(self, pad=True):
         main = [words(self.n), pairing.witness_shape(self.n)]
@@ -129,7 +137,10 @@ class Groth16:
     def checks(self, main):
         """The pairing check on (-A, B, C) and the public inputs, and the range checks of the inputs."""
         be, cv = self.be, self.cv
-        scalars, ((pts, ac), (rz, (leaves, q))) = main
+        if is_sym(be): # the leaves and Q are witness nodes of their own
+            (scalars, ((pts, ac), rz)), leaves, q = main, None, None
+        else:
+            scalars, ((pts, ac), (rz, (leaves, q))) = main
         chk = self.pc.program({'x': [Val(a, R - 1) for a in scalars], 'words': scalars}, pts, ac, rz, leaves, q)
         ranges = [cv.lt_const_check(Val(a, 0), R) for a in scalars]
         if not is_sym(be):

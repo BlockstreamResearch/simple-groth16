@@ -144,9 +144,22 @@ class Sym:
         self._stat('comp', 100 + s.w)
         return E(f'comp ({s.t}) ({t.t})', t.w, 100 + s.w + s.c + t.c)
 
+    def injl(self, e, w):
+        """The left injection into a sum type of width w (1 + the wider side)."""
+        return E(f'injl ({e.t})', w, 100 + e.c)
+
+    def injr(self, e, w):
+        return E(f'injr ({e.t})', w, 100 + e.c)
+
     def case(self, l, r):
         assert l.w == r.w
         return E(f'case ({l.t}) ({r.t})', l.w, 100 + max(l.c, r.c))
+
+    def witness(self, name, ty, width):
+        """A witness node of its own, `name := witness : _ -> ty`: its value is read where the node is, so
+        it need not be carried there through the environment."""
+        self.em.define(name, 'witness', f'_ -> {ty}')
+        return E(name, width, 100 + width)
 
     def const(self, bits, v):
         self._stat('const', 300 + bits)

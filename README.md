@@ -25,10 +25,10 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 
 | | |
 |---|---|
-| program cost, one public signal | 53.0 M mWU |
-| transaction | 54.6 kWU, 13.7 kvB |
-| pruned program / witness | 35 kB / 18 kB |
-| fee at 0.115 sat/vB | ~ 1,600 sat |
+| program cost, one public signal | 48.6 M mWU |
+| transaction | 53.3 kWU, 13.3 kvB |
+| pruned program / witness | 34 kB / 18 kB |
+| fee at 0.115 sat/vB | ~ 1,500 sat |
 
 The program's bytes earn more budget than it costs, so it needs no padding. The transaction is about a seventh of the 400 kWU standard limit.
 
@@ -64,7 +64,7 @@ Each test generates programs for one layer, runs them through `hand` (which exec
    $D compile build/multiplier/verifier.simpl build/multiplier/verifier 
    ```
 
-   `setup` compiles the circuit, downloads a powers-of-tau file, runs the snarkjs setup and writes `verifier.simpl`. `deploy compile` parses it and writes `verifier.uprog`.
+   `setup` compiles the circuit, downloads a powers-of-tau file, runs the snarkjs setup and writes `verifier.simpl`. `deploy compile` parses it and writes `verifier.uprog` (and `verifier.wnames`, the order of its witness nodes).
 
 2. Get the address and fund it:
 

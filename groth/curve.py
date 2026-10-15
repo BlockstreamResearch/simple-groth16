@@ -1,4 +1,4 @@
-"""G1 and G2 arithmetic with prover-supplied slopes, and the fixed-base MSM of the public inputs.
+"""G1 and G2 checks with prover-supplied slopes, and constant tables selected by bits of a word.
 
 Points are affine.  Every doubling or addition takes its slope lambda from the witness, and the program
 checks the defining equation instead of inverting:
@@ -13,41 +13,14 @@ step outputs, so that every accumulator stays within the CRT bound.
 `chain` sequences such steps: each step computes some values and binds them in a fresh, minimal
 environment.
 
-MSM: L = IC_0 + sum a_i IC_i with fixed bases.  For each w-bit digit d of a scalar, the point
-[(d + 1) 2^{wj}] IC_i is selected from a constant table by a case tree on the digit bits and added with a
-hinted slope.  The +1 keeps the point at infinity out of the tables; a constant offset folded into IC_0
-compensates for it.
+Tables: `select_const` picks the entry of a constant table by a digit of a word (a few of its bits) with
+a case tree on the bits.  When the program is pruned for a spend, only the selected entry and the
+commitments of the branches not taken remain.
 """
 from . import bn254
 from .dsl import ensure
-from .fp import Val, P, P_SECP, to_mont, mult_of_p_at_least, WORD_MAX
-from .sym import E, flat, is_sym
-
-R_ORDER = bn254.R
-THREE_HALVES = 3 * pow(2, -1, P) % P
-MSM_X_HI, MSM_Y_HI = 2 * P - 1, 3 * P - 1 # bounds of the MSM accumulator between windows
-
-
-def fold_tree(be, state_shape, n, step, leaf_w=256):
-    """Fold a state over the n leaves of a balanced tree.  The result is an E over (state, tree);
-    step(k)(accs) is an E over (state, leaf k) with accs = (state accessors, leaf accessor).  Each node
-    copies the state and its own subtree, never the whole tree."""
-    state_w = sum(e.w for e in flat(state_shape))
-
-    def go(lo, hi):
-        if hi - lo == 1:
-            be._push_env(state_w + leaf_w)
-            try:
-                res = step(lo)((be._unpack('O', state_shape), be.proj('IH', leaf_w)))
-            finally:
-                be._pop_env()
-            return res
-        mid = lo + (hi - lo + 1) // 2
-        lw, rw = leaf_w * (mid - lo), leaf_w * (hi - mid)
-        # env = (state, (left, right)): fold the left subtree, then the right one
-        inner = be.comp(be.pair(be.proj('OH', state_w), be.proj('IOH', lw)), go(lo, mid))
-        return be.comp(be.pair(inner, be.proj('IIH', rw)), go(mid, hi))
-    return go(0, n)
+from .fp import Val, P, P_SECP, mult_of_p_at_least
+from .sym import E, is_sym
 
 
 def chain(fp, ctx, steps, final):
@@ -255,15 +228,14 @@ class Curve:
             flag = be.or1(be.lt64(limbs[i], be.const(64, consts[i])), be.and1(be.eq64(limbs[i], be.const(64, consts[i])), flag))
         return Val(be.verify(flag), 0)
 
-    # fixed-base MSM of the public inputs
-    def select_point(self, word, lo, w, table):
-        """Table entry (x, y) indexed by bits lo .. lo+w-1 of the projected scalar `word`, as a 512-bit
-        value: a case tree on the bits, most significant first, with constant pairs as leaves."""
+    # constant tables, selected by bits of a word
+    def select_const(self, word, lo, w, leaves):
+        """leaves[d] for the digit d in bits lo .. lo+w-1 of the projected word `word` (a Val): each leaf a
+        list of groups of constant words.  A case tree on the bits, most significant first, with the leaves
+        as wide constants.  Sym: an E of the leaf's words; Num: leaves[d]."""
         be = self.be
         if not is_sym(be):
-            d = (word.e >> lo) & ((1 << w) - 1)
-            x, y = table[d]
-            return Val([to_mont(x), to_mont(y)], 0)
+            return leaves[(word.e >> lo) & ((1 << w) - 1)]
         if w & (w - 1) == 0 and lo % w == 0 and 256 % w == 0:
             # the w bits are one aligned chunk of the word: project it once, and split it into its bits with a
             # shared function, so that a window adds few nodes of its own
@@ -279,14 +251,13 @@ class Curve:
         # reads rest with `drop`.
         def tree(depth, prefix):
             if depth == w:
-                x, y = table[prefix]
-                return be.consts(256, [[to_mont(x), to_mont(y)]])
+                return be.consts(256, leaves[prefix])
             l, r = tree(depth + 1, prefix << 1), tree(depth + 1, (prefix << 1) | 1)
             if depth + 1 < w:
                 l, r = be.drop(l), be.drop(r)
             # named every few levels, so that no line of the program text is long (the parser is slow on those)
             return be.share(be.case(l, r)) if (w - depth) % 4 == 0 else be.case(l, r)
-        return Val(be.comp(env, tree(0, 0)), 0)
+        return be.comp(env, tree(0, 0))
 
     def bits_fn(self, w):
         """BITS<w>: a w-bit word -> its bits, most significant first, as (b, (b, ... (b, 1))), the input of a
@@ -305,116 +276,3 @@ class Curve:
                 return env
             fns[w] = be.function(f'BITS{w}', [E('', w, 0)], body)
         return fns[w]
-
-    def msm_window_steps(self, j, w, table):
-        """One window: select the table point by the digit of scalar 's' and add it with hint 'lam'.
-        ctx: 'x', 'y', 's', 'lam'; results 'x', 'y'.  Each coordinate is a single dot, with the plain terms
-        written as products with the Montgomery constants [-1] and [1], so no normalisation is needed
-        (x stays below 1.7 p, y below 2.4 p)."""
-        fp = self.fp
-        # a shared node belongs to one environment, so constants are created where they are used
-        def m1(): return fp.const(P - 1) # [-1]_M
-        def one(): return fp.const(1) # [1]_M = R mod p, a small word (0.29 p)
-
-        def qx(c): return Val(self.be.sub(c['_sel'].e, 'O', 256), P - 1)
-        def qy(c): return Val(self.be.sub(c['_sel'].e, 'I', 256), P - 1)
-        return [
-            ('let', ['_sel', 'lam'], lambda c: [self.select_point(c['s'], j * w, w, table), fp.normalize(c['lam'])]),
-            ('check', lambda c: self.neq_check(qx(c), c['x'])),
-            # lam (qx - x) - (qy - y) = 0 as one reduced dot, then x2 = lam^2 - x - qx
-            ('check', lambda c: self.zero_check(fp.reduce_dot([(c['lam'], fp.sub(qx(c), c['x'])), (qy(c), m1()), (c['y'], one())]))),
-            ('let', ['x2'], lambda c: [fp.reduce_dot([(c['lam'], c['lam']), (c['x'], m1()), (qx(c), m1())])]),
-            ('drop', ['_sel']),
-            ('let', ['y2'], lambda c: [fp.reduce_dot([(c['lam'], c['x']), (c['lam'], fp.neg(c['x2'])), (c['y'], m1())])]),
-            ('let', ['x', 'y'], lambda c: [c['x2'], c['y2']]),
-            ('drop', ['x2', 'y2', 'lam']),
-        ]
-
-    def msm(self, scalars, hints, tables, start, w, nbits=254):
-        """Numeric MSM: start + sum_ij [(d_ij + 1) 2^{wj}] base_i over the digits d_ij of the scalars,
-        with hints[i][j] the slopes.  Returns (x, y) and the checks.  msm_sym is the symbolic version."""
-        fp = self.fp
-        nwin = (nbits + w - 1) // w
-        x, y = fp.const(start[0]), fp.const(start[1])
-        all_checks = []
-        for i, sc in enumerate(scalars):
-            for j in range(nwin):
-                ctx = {'x': Val(x.e, MSM_X_HI), 'y': Val(y.e, MSM_Y_HI), 's': sc, 'lam': Val(hints[i][j].e, WORD_MAX)}
-
-                def final(c, checks):
-                    all_checks.extend(checks)
-                    ensure(c['x'].hi <= MSM_X_HI and c['y'].hi <= MSM_Y_HI, 'MSM state bound')
-                    return (c['x'], c['y'])
-                x, y = chain(fp, ctx, self.msm_window_steps(j, w, tables[i][j]), final)
-        return (x, y), all_checks
-
-    def msm_sym(self, scalars, hints_root, tables, start, w, nbits=254):
-        """Symbolic MSM.  The hints (scalar-major) are the leaves of the balanced tree at hints_root; the
-        state (x, y, scalars) is folded over that tree, so each step sees only its own hint.  Returns the
-        E of the final state, all checks executed."""
-        be, fp = self.be, self.fp
-        nwin = (nbits + w - 1) // w
-        n = len(scalars)
-        state = be.pack([fp.const(start[0]).e, fp.const(start[1]).e, [sc.e for sc in scalars]])
-        shape = [E('', 256, 0), E('', 256, 0), [E('', 256, 0)] * n]
-
-        def step(k):
-            i, j = divmod(k, nwin)
-
-            def body(accs):
-                st, hint = accs
-                # the state bounds are a fixed point of the window step (checked in final)
-                ctx = {'x': Val(st[0], MSM_X_HI), 'y': Val(st[1], MSM_Y_HI), 'S': [Val(e, R_ORDER - 1) for e in st[2]],
-                       's': Val(st[2][i], R_ORDER - 1), 'lam': Val(hint, WORD_MAX)}
-
-                def final(c, checks):
-                    ensure(c['x'].hi <= MSM_X_HI and c['y'].hi <= MSM_Y_HI, 'MSM state bound')
-                    new_state = be.pack([c['x'].e, c['y'].e, [v.e for v in c['S']]])
-                    chk = be.checks([v.e for v in checks]) if checks else be.unit()
-                    return be.comp(be.pair(chk, new_state), be.proj('IH', 512 + 256 * n))
-                return chain(fp, ctx, self.msm_window_steps(j, w, tables[i][j]), final)
-            return body
-        return be.comp(be.pair(state, hints_root), fold_tree(be, shape, n * nwin, step))
-
-    @staticmethod
-    def msm_tables(bases, w, nbits=254):
-        """tables[i][j][d] = [(d + 1) 2^{wj}] base_i, and the offset -sum_ij [2^{wj}] base_i that cancels
-        the +1."""
-        nwin = (nbits + w - 1) // w
-        tables, offset = [], None
-        for base in bases:
-            tab = []
-            for j in range(nwin):
-                step = bn254.g1_mul(base, 1 << (w * j))
-                offset = bn254.g1_add(offset, bn254.g1_neg(step))
-                entries, acc = [], None
-                for d in range(1 << w):
-                    acc = bn254.g1_add(acc, step)
-                    entries.append(acc)
-                tab.append(entries)
-            tables.append(tab)
-        return tables, offset
-
-    @staticmethod
-    def msm_hints(start, scalars, tables, w, nbits=254):
-        """Prover side: the slopes of the MSM additions and the result, (hints[i][j], L)."""
-        nwin = (nbits + w - 1) // w
-        acc = start
-        hints = []
-        for i, sc in enumerate(scalars):
-            hi = []
-            for j in range(nwin):
-                d = (sc >> (w * j)) & ((1 << w) - 1)
-                q = tables[i][j][d]
-                hi.append(Curve.g1_add_hint(acc, q))
-                acc = bn254.g1_add(acc, q)
-            hints.append(hi)
-        return hints, acc
-
-    @staticmethod
-    def g1_add_hint(Pt, Q):
-        """Prover side: the slope of the addition Pt + Q."""
-        x1, y1 = Pt
-        x2, y2 = Q
-        assert x1 != x2
-        return (y2 - y1) * pow(x2 - x1, -1, P) % P

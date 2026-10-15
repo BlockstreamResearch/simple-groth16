@@ -16,7 +16,7 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 - Curve arithmetic needs no inversions. Adding or doubling points normally divides to get the slope of a line; here the prover puts every slope in the witness, and the program checks it with a multiplication: `λ * (x2 - x1) = y2 - y1` for an addition, `λ * 2y = 3x^2` for a doubling.
 - There is no arithmetic in F_p12. The prover writes every intermediate value of the Miller loop into the witness, and the program checks all 88 steps at once, as one polynomial identity at a random point chosen by hashing the witness ([Fiat–Shamir](https://en.wikipedia.org/wiki/Fiat%E2%80%93Shamir_heuristic) with SHA-256), so a product in F_p12 costs one product in F_p.
 - There is no final exponentiation. The prover supplies a [residue witness](https://eprint.iacr.org/2024/640) (Novakovic and Eagen, 2024), and the program checks a short identity instead.
-- The key is compiled in. The lines of gamma and delta are constants, the IC points become lookup tables, and $e(\alpha, \beta)$ is folded into the final comparison.
+- The key is compiled in. The lines of delta are constants; gamma and the IC points become lookup tables of pairing values, since $e(L, \gamma) = e(IC_0, \gamma) \prod_i e(IC_i, \gamma)^{a_i}$, so L is never computed; and $e(\alpha, \beta)$ is folded into the final comparison.
 - The circuit requires a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0. The program recomputes that root from its `sig_all_hash` jet, so a proof spends exactly one transaction and cannot be replayed or redirected.
 
 [Design document](docs/design.md) explains each part in more detail.
@@ -25,12 +25,12 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 
 | | |
 |---|---|
-| program cost, one public signal | 61.5 M mWU |
-| transaction | 66.8 kWU, 16.7 kvB |
-| pruned program / witness | 45 kB / 21 kB |
-| fee at 0.115 sat/vB | ~ 1,900 sat |
+| program cost, one public signal | 53.0 M mWU |
+| transaction | 54.6 kWU, 13.7 kvB |
+| pruned program / witness | 35 kB / 18 kB |
+| fee at 0.115 sat/vB | ~ 1,600 sat |
 
-The program's bytes earn more budget than it costs, so it needs no padding. The transaction is about a sixth of the 400 kWU standard limit.
+The program's bytes earn more budget than it costs, so it needs no padding. The transaction is about a seventh of the 400 kWU standard limit.
 
 ## Quick start
 

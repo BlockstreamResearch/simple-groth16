@@ -14,7 +14,7 @@ the slope relations need no inverse of xQ - x.
 import math, os, random, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from groth import bn254 as B, poly, pairing as PC
-from test_pairing import program, witness, INPUT
+from test_pairing import program, witness
 import harness
 
 
@@ -98,7 +98,11 @@ def main():
     check_additions(rng)
     key = random.Random(11)
     gamma, delta = B.g2_mul(B.G2_GEN, key.randrange(1, B.R)), B.g2_mul(B.G2_GEN, key.randrange(1, B.R))
-    A, C, L = (B.g1_mul(B.G1_GEN, rng.randrange(1, B.R)) for _ in range(3))
+    A, C = (B.g1_mul(B.G1_GEN, rng.randrange(1, B.R)) for _ in range(2))
+    # no public inputs (gamma pairs with IC_0 alone), so that the program has no tables: B's relations do
+    # not depend on them
+    gt = PC.gt_constants([B.g1_mul(B.G1_GEN, rng.randrange(1, B.R))], gamma)
+    unit = PC.Prover(delta, B.Fp12.one(), gt)
     h = 2 * B.P - B.R
     good = B.g2_mul(B.G2_GEN, rng.randrange(1, B.R))
     small = B.g2_mul_unreduced(B.g2_random_point(rng), B.R * h // 10069) # order 10069
@@ -109,14 +113,14 @@ def main():
     c_lam = c ** B.LAMBDA
     for label, Bq, in_g2 in cases:
         assert B.g2_on_curve(*Bq) and B.g2_in_subgroup(Bq) == in_g2
-        pairs = [(A, Bq), (L, gamma), (C, delta)]
-        prover = PC.Prover(gamma, delta, c_lam * B.multi_miller_loop_affine(pairs).inv())
-        w = prover.witness(pairs, [INPUT], residue=(c, 0), check=False)
-        rels = PC.relations(PC.PolyRing, w['values'], prover.lines, prover.tau)
+        pairs = [(A, Bq), (C, delta)]
+        prover = PC.Prover(delta, c_lam * unit.product(pairs, []).inv(), gt)
+        w = prover.witness(pairs, [], residue=(c, 0), check=False)
+        rels = PC.relations(PC.PolyRing, w['values'], prover.lines)
         failing = [k for k, rel in enumerate(rels) if any(poly.reduce(rel))]
         assert failing == ([] if in_g2 else [PC.N_RELS - 3, PC.N_RELS - 2]), (label, failing)
-        text, estimate, _ = program(gamma, delta, prover.const, b)
-        r = harness.run('g2_check', text, witness(L, w))
+        text, estimate, _ = program(delta, prover.const, gt, b)
+        r = harness.run('g2_check', text, witness([], w))
         if in_g2:
             harness.expect_ok(r, label)
             assert r['cost'] == estimate, (r['cost'], estimate)

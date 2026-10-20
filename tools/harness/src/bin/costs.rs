@@ -8,7 +8,6 @@
 use simplicity::dag::{DagLike, NoSharing};
 use simplicity::human_encoding::Forest;
 use simplicity::jet::Elements;
-use simplicity::jet::Jet as _;
 use simplicity::node::Inner;
 use std::collections::HashMap;
 

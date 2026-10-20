@@ -56,6 +56,9 @@ def chain(fp, ctx, steps, final):
     are not copied along.  Steps:
 
         ('let', names, fn)     bind fn(ctx) under names
+        ('let', names, fn, gone) the same, forgetting the values `gone` (read by fn) in the new environment
+        ('push', names, fn)    bind fn(ctx) under names in front of the environment (fp.let): the live
+                               values stay where they are, one level deeper, instead of being copied
         ('check', fn)          fn(ctx) -> a unit-typed Val or a list of them, collected
         ('drop', names)        forget values
 
@@ -109,9 +112,26 @@ def chain(fp, ctx, steps, final):
         step, rest = steps[0], steps[1:]
         kind = step[0]
         if kind == 'let':
-            _, names, fn = step
+            _, names, fn, *gone = step
             vals = fn(ctx)
-            return repack(ctx, dict(zip(names, vals)), lambda ctx2: go(ctx2, rest))
+            kept = {k: v for k, v in ctx.items() if k not in (gone[0] if gone else ())}
+            return repack(kept, dict(zip(names, vals)), lambda ctx2: go(ctx2, rest))
+        if kind == 'push':
+            _, names, fn = step
+            stripped = [strip(v) for v in fn(ctx)]
+
+            def lifted(v, lift):
+                if isinstance(v, Val):
+                    return lift(v)
+                if v is None or not is_val(v):
+                    return v
+                return type(v)(lifted(x, lift) for x in v) if isinstance(v, tuple) else [lifted(x, lift) for x in v]
+
+            def body(new, lift):
+                ctx2 = {k: lifted(v, lift) for k, v in ctx.items()}
+                ctx2.update({k: restore(nv, info) for k, nv, (sv, info) in zip(names, new, stripped)})
+                return go(ctx2, rest)
+            return fp.let([sv for sv, info in stripped], body)
         if kind == 'check':
             _, fn = step
             res = fn(ctx)
@@ -254,11 +274,12 @@ class Curve:
         def tree(depth, prefix):
             if depth == w:
                 x, y = table[prefix]
-                return be.consts(256, [to_mont(x), to_mont(y)])
+                return be.consts(256, [[to_mont(x), to_mont(y)]])
             l, r = tree(depth + 1, prefix << 1), tree(depth + 1, (prefix << 1) | 1)
             if depth + 1 < w:
                 l, r = be.drop(l), be.drop(r)
-            return be.case(l, r)
+            # named every few levels, so that no line of the program text is long (the parser is slow on those)
+            return be.share(be.case(l, r)) if (w - depth) % 4 == 0 else be.case(l, r)
         return Val(be.comp(env, tree(0, 0)), 0)
 
     def msm_window_steps(self, j, w, table):

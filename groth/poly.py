@@ -117,3 +117,5 @@ def frobenius_matrix(n):
 
 
 FROB = {n: frobenius_matrix(n) for n in (1, 2, 3)}
+# pi^n(w) = t_n, the (power, coefficient) of its terms: t_1 = a w + b w^7, t_2 = omega' w, t_3 = omega' t_1
+FROB_W = {n: [(k, g) for k, g in enumerate(FROB[n][1]) if g] for n in (1, 2, 3)}

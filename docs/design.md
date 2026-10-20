@@ -107,7 +107,7 @@ M(w) = w^12 - 18 w^6 + 82 = 0
 
 So F_p12 = F_p[w]/M(w): an element is a polynomial of degree at most 11 with coefficients in F_p, and a product is the polynomial product reduced modulo M. F_p2 sits inside as the polynomials a0 + a1 (w^6 - 9). This is the representation py_ecc uses, and the tests check the map from the tower against it.
 
-The flat form matters because a polynomial identity can be checked at a single point. If A B = C in F_p12, then A(w) B(w) = C(w) + Q(w) M(w) for a quotient polynomial Q, and at any number z this becomes one equation in F_p: A(z) B(z) = C(z) + Q(z) M(z). An F_p12 product, which costs about 1.6 M mWU when computed coefficient by coefficient, becomes one F_p product of two evaluations. The Frobenius maps π, π^2, π^3 are linear maps on the coefficients with one or two terms each.
+The flat form matters because a polynomial identity can be checked at a single point. If A B = C in F_p12, then A(w) B(w) = C(w) + Q(w) M(w) for a quotient polynomial Q, and at any number z this becomes one equation in F_p: A(z) B(z) = C(z) + Q(z) M(z). An F_p12 product, which costs about 1.6 M mWU when computed coefficient by coefficient, becomes one F_p product of two evaluations. The Frobenius maps π, π^2, π^3 are ring homomorphisms that fix F_p, so π^n(a) is a(t_n) modulo M, where t_n = π^n(w) has one or two terms: t_1 = a w + b w^7, t_2 = g w and t_3 = g t_1, with g a sixth root of unity.
 
 ## The pairing check (pairing.py)
 
@@ -123,7 +123,7 @@ Each step multiplies f (squared, for a doubling) by three lines, one per pair, e
 f^2 l_B l_γ l_δ - f' = 0   (mod M)
 ```
 
-The prover does not commit after every step. Without a commitment, f' is the product itself, a polynomial of higher degree that the next relation carries along, and that next relation checks two steps at once. A committed value costs 12 witness words; a higher degree costs words of the quotient (below). The generator skips a commitment whenever the identity's degree stays within 211, the cap with the fewest words in total: 35 of the 88 Miller values are committed.
+The prover does not commit after every step. Without a commitment, f' is the product itself, a polynomial of higher degree that the next relation carries along, and that next relation checks two steps at once. A committed value costs 12 witness words; a higher degree costs words of the quotient (below). Every addition commits its value (most would anyway, and so one function serves all additions), and a doubling skips its commitment whenever the identity's degree stays within 211, the cap with the fewest words in total: 37 of the 88 Miller values are committed.
 
 γ and δ belong to the key, so their slopes and lines are computed when the program is generated: each step receives c3 and c4 for both, four words each. B comes from the proof. The prover writes only B's slopes; B's points are never written down. The new point of a doubling is x' = λ^2 - 2x, y' = λ (x - x') - y, a polynomial in the slopes, and the program checks each slope instead:
 
@@ -142,15 +142,15 @@ Computing f^h directly would take about 200 F_p12 squarings and products. The ve
 f w = c^λ,   λ = 6x + 2 + p - p^2 + p^3
 ```
 
-Since r divides λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (w e(α, β))^(-1), one of three constants selected by two witness bits, and another checks c c^(-1) = 1.
+Since r divides λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (w e(α, β))^(-1), one of three constants selected by two witness bits, and another checks c c^(-1) = 1. The program evaluates π^n(c) at z as c(t_n(z)), by Horner's rule, which needs the two or three constants of t_n instead of the 45 of the Frobenius matrices. As polynomials, c(t_1) and c(t_3) have degree 77, so the last Miller value is committed to keep this relation within the degree cap.
 
 ### B is in G2
 
-The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ^2(B), where ψ is the Frobenius map carried over to the twist. On G2, ψ acts as multiplication by p, and 6x + 2 + p - p^2 + p^3 is a multiple of the group order, so there T = -ψ^3(B). Off G2 the two differ: the rest of the twist is a cyclic group of square-free order, and the map [6x+2] + ψ - ψ^2 + ψ^3 sends none of its points except the identity to the identity (tests/test_g2_check.py checks one point of each prime order). Two relations compare T with -ψ^3(B).
+The loop also proves that B is in G2. Its last point is T = [6x+2]B + ψ(B) - ψ^2(B), where ψ is the Frobenius map carried over to the twist. On G2, ψ acts as multiplication by p, and 6x + 2 + p - p^2 + p^3 is a multiple of the group order, so there T = -ψ^3(B). Off G2 the two differ: the rest of the twist is a cyclic group of square-free order, and the map [6x+2] + ψ - ψ^2 + ψ^3 sends none of its points except the identity to the identity (tests/test_g2_check.py checks one point of each prime order). Two relations compare T with -ψ^3(B). That point needs no constants of its own: ψ^2 multiplies x by a cube root of unity and negates y, so -ψ^3(B) = -ψ^2(ψ(B)) is ψ(B) with x scaled, and ψ(B) is the point the first Frobenius addition uses.
 
 ### One identity, checked at one point
 
-That makes 127 relations R_k, each a polynomial in w of degree at most 211. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (200 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
+That makes 129 relations R_k, each a polynomial in w of degree at most 211. The prover combines them with the powers of a challenge r into S = Σ r^k R_k, divides S by M, and writes the quotient Q (200 coefficients) into the witness. The program then picks a point z, evaluates every polynomial at z, and checks
 
 ```
 S(z) = Q(z) M(z)
@@ -158,23 +158,32 @@ S(z) = Q(z) M(z)
 
 This is randomized extension-field arithmetic: [Garaga](https://hackmd.io/@feltroidprime/B1eyHHXNT) checks each F_p12 product with its own quotient, and Novakovic and Eagen (section 6) combine all relations into one quotient, as here. Two things are specific to this verifier: the challenges come from SHA-256 inside the program, and B's F_p2 arithmetic is part of the same identity, so B's points never enter the witness.
 
-The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.39 M mWU, or 0.61 M with a commitment, against 3.6 M for computing it in the tower. Q(z) is evaluated eight coefficients at a time by one shared function, so its code is in the program once.
+The program never multiplies in F_p12. A committed value f' becomes the number f'(z), a 12-term dot product with the powers of z; a line becomes a number; a step's relation becomes a few F_p products, added to a running Horner sum of S(z). A doubling step costs 0.37 M mWU, or 0.58 M with a commitment, against 3.6 M for computing it in the tower. Q(z) is evaluated eight coefficients at a time by one shared function, so its code is in the program once.
 
-r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 127 values of r, and then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at most 211/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
+r and z come from SHA-256 (Fiat-Shamir): r hashes the public inputs, the proof, c, c^(-1), s and everything the loop committed, and z hashes r and Q. The program gets r and z as witness words, uses them throughout, and at the end compares them with the two hashes it has computed along the way. If some relation does not hold, S is nonzero modulo M except for at most 129 values of r, and then S - Q M is a nonzero polynomial of degree at most 211, which vanishes at z with probability at most 211/p. A cheating prover must find a hash output in a set of relative size about 2^-245.
 
 The committed words are checked to be below 2^254 (their two top bits are zero), so that the 12-term dot products fit the bound of the field arithmetic; every canonical word passes. The program normalises the challenges, whose words are arbitrary 256-bit hashes.
 
-The witness is 28 kB: the committed Miller values (13 kB), the quotient (6 kB), B's slopes (6 kB) and the rest of the proof. The program is 60 kB; the line data of γ and δ, four words per pair and step, is 22 kB of it.
+The witness is 28 kB: the committed Miller values (14 kB), the quotient (6 kB), B's slopes (6 kB) and the rest of the proof. The program is 47 kB; the line data of γ and δ, four words per pair and step, is 22.5 kB of it.
+
+### The size of the program
+
+Since the program earns more budget than it costs, the transaction's weight is its bytes, and the program is written to be small:
+
+- A constant of several words is one wide constant, a single node with all the bits, instead of a tree of 2n - 1 nodes: the line data of each step (8 words), each entry of the MSM tables (2 words), the rows of T_s (8 + 4 words).
+- Code that would repeat is a function: three step functions (a doubling with and without a commitment, an addition), Q(z) eight coefficients at a time, a(t) for 12 words by Horner's rule (c(z), c^(-1)(z), the three Frobenius images and T_s(z)), and the range check of 12 committed words. A function costs about 0.5 kB of code; the Frobenius additions run the addition's function with g = 1.
+- A function's intermediate values are pushed in front of its environment instead of being copied into a new one, so the values it only reads stay where they are.
+- The setup takes -ψ^3(B) from ψ(B) and the Frobenius images from t_n, as above: three constants where it held about fifty.
 
 ## Public input and transaction binding (curve.py, merkle.py, groth16.py)
 
-The point L = IC_0 + Σ a_i·IC_i combines the key's IC points with the public inputs a_i. The IC points are fixed, so the program uses precomputed tables: for every 5-bit digit d at position j of an input, it selects the point [(d + 1)·2^(5j)]·IC_i from a table with a case tree on the digit's bits, and adds it with a slope from the prover. The +1 keeps the point at infinity out of the tables, and a constant offset added to IC₀ cancels it. The inputs are checked to be below the group order. When the program is pruned for a spend, the table entries that were not selected disappear, so the tables cost nothing on chain. One public input costs 8.7 M mWU.
+The point L = IC_0 + Σ a_i·IC_i combines the key's IC points with the public inputs a_i. The IC points are fixed, so the program uses precomputed tables: for every 8-bit digit d at position j of an input, it selects the point [(d + 1)·2^(8j)]·IC_i from a table with a case tree on the digit's bits, and adds it with a slope from the prover. The +1 keeps the point at infinity out of the tables, and a constant offset added to IC₀ cancels it. The inputs are checked to be below the group order. When the program is pruned for a spend, the table entries that were not selected disappear, so the tables cost nothing on chain: a window keeps its entry (64 bytes) and the commitments of the eight branches it did not take (32 bytes each). One public input takes 32 windows and costs 5.5 M mWU; 8 bits is the width with the fewest bytes whose program text still parses in a few minutes.
 
 To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, merkle.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 15 k mWU and the circuit about 59 k constraints per hashed node.
 
 ## Budget and padding (groth16.py)
 
-The program costs 66.7 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 60 kB program and the 28 kB witness already earn about 88 M mWU, and no padding is needed: the transaction weighs about 89 kWU.
+The program costs 61.5 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 47 kB program and the 28 kB witness already earn about 75 M mWU, and no padding is needed: the transaction weighs about 76 kWU.
 
 Programs that cost more than their bytes earn can still be padded. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks of 512 zero bytes go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
 

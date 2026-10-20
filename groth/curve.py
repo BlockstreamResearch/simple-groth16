@@ -236,28 +236,44 @@ class Curve:
         be = self.be
         if not is_sym(be):
             return leaves[(word.e >> lo) & ((1 << w) - 1)]
-        if w & (w - 1) == 0 and lo % w == 0 and 256 % w == 0:
-            # the w bits are one aligned chunk of the word: project it once, and split it into its bits with a
-            # shared function, so that a window adds few nodes of its own
+        aligned = w & (w - 1) == 0 and lo % w == 0 and 256 % w == 0
+        if aligned:
+            # the w bits are one aligned chunk of the word: project it once, and turn it into the digit as a
+            # nested sum with a shared function, so that a window adds few nodes of its own
             path = ''.join('O' if (255 - lo) >> (7 - k) & 1 == 0 else 'I' for k in range(8))[:8 - (w.bit_length() - 1)]
-            env = be.call(self.bits_fn(w), [be.sub(word.e, path, w)])
+            env = be.call(self.digit_fn(w), [be.sub(word.e, path, w)])
         else:
             bits = [be.bit(word.e, lo + i) for i in range(w - 1, -1, -1)]
             env = be.unit()
             for b in reversed(bits):
                 env = be.pair(b, env)
 
-        # case s t : (A + B) x C -> D.  A bit is 1 + 1, so each branch sees (1, rest) and the next level
-        # reads rest with `drop`.
+        # case s t : (A + B) x C -> D.  On the digit as a nested sum, (T_w, 1) with T_k = T_(k-1) + T_(k-1),
+        # each branch sees (T_(k-1), 1), the next level's input.  On bits, (b, rest) with b = 1 + 1, each
+        # branch sees (1, rest) and the next level reads rest with `drop`.
         def tree(depth, prefix):
             if depth == w:
                 return be.consts(256, leaves[prefix])
             l, r = tree(depth + 1, prefix << 1), tree(depth + 1, (prefix << 1) | 1)
-            if depth + 1 < w:
+            if depth + 1 < w and not aligned:
                 l, r = be.drop(l), be.drop(r)
             # named every few levels, so that no line of the program text is long (the parser is slow on those)
             return be.share(be.case(l, r)) if (w - depth) % 4 == 0 else be.case(l, r)
         return be.comp(env, tree(0, 0))
+
+    def digit_fn(self, w):
+        """DIGIT<w>: a w-bit word -> (T_w, 1), its value as a nested sum, T_0 = 1 and T_k = T_(k-1) + T_(k-1)
+        with the most significant bit outermost: a case tree on it needs no `drop`.  BITS<w>, then one case
+        per bit.  Defined once per program."""
+        be = self.be
+        fns = be.__dict__.setdefault('_digit_fns', {})
+        if w not in fns:
+            f = be.unit() # T_0 from the 1 that ends the bits
+            for k in range(1, w + 1): # (b, rest) -> T_k: the bit picks the side, the rest gives T_(k-1)
+                f = be.case(be.injl(be.drop(f), k), be.injr(be.drop(f), k))
+            bits = self.bits_fn(w)
+            fns[w] = be.function(f'DIGIT{w}', [E('', w, 0)], lambda acc: be.pair(be.comp(be.call(bits, [acc[0] if isinstance(acc, list) else acc]), f), be.unit()))
+        return fns[w]
 
     def bits_fn(self, w):
         """BITS<w>: a w-bit word -> its bits, most significant first, as (b, (b, ... (b, 1))), the input of a

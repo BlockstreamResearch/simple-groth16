@@ -37,7 +37,7 @@ def main():
     bad_proof = dict(wit)
     C2 = B.g1_add(proof[2], B.G1_GEN)
     bad_proof['points'] = wit['points'][:6] + [F.to_mont(C2[0]), F.to_mont(C2[1])]
-    wv = lambda gen, wt: {'w_in': gen.witness_value(wt)}
+    wv = lambda gen, wt: gen.witness_value(wt)
     t0 = time.time()
     results = harness.run(f'groth16_{n}', text, wv(g, wit), multi=[wv(g, bad_input), wv(g, bad_proof)])
     seconds = time.time() - t0

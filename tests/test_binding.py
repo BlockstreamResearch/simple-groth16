@@ -39,7 +39,7 @@ def main():
     vk2, proof2, inputs2 = B.groth16_instance(1, seed=11, inputs=[other_root])
     bad_tx = Groth16(F.Fp(Num()), vk2, b=bnd, depth=depth).witness(proof2, inputs2, bytes(32), merkle.siblings(other))
     assert bad_tx is not None
-    wv = lambda wt: {'w_in': g.witness_value(wt)}
+    wv = lambda wt: g.witness_value(wt)
     t0 = time.time()
     results = harness.run('binding', text, wv(wit), multi=[wv(bad_sib), wv(bad_tx)])
     r = harness.expect_ok(results[0], 'binding')

@@ -16,16 +16,17 @@ tools/harness/target/release/hand examples/fp_mul.simpl examples/fp_mul.w0.json 
 
 ## multiplier/
 
-The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending transaction) and the files of one spend on an Elements regtest node, transaction `1186110d…`, which proves c = 21.
+The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending transaction) and the files of one spend on an Elements regtest node, transaction `407cf881…`, which proves c = 21.
 
 | file | |
 |---|---|
 | `verification_key.json` | the snarkjs key |
 | `verifier.simpl.gz` | the generated program, 2.8 MB of text (most of it the public input's tables) |
-| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `f962cf7e…029b74a9` |
+| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `bab3e5fa…2e222d55` |
+| `verifier.wnames` | the names of its witness nodes in the order the encoding reads their values (`deploy compile`) |
 | `proof.json`, `public.json` | the snarkjs proof and its public signal |
 | `leaves.json` | the two leaves behind the public signal: the transaction's sighash and c |
-| `verifier.w0.json.gz` | the witness: proof, compressed Miller values, slopes, quotient, Merkle sibling |
+| `verifier.w0.json.gz` | the witness, by witness node: proof and Merkle sibling (`w_in`), each step's slope and compressed Miller value (`wl0` to `wl87`), the quotient (`wq`) |
 
 `tools/groth16_snarkjs.py` regenerates the program and the witness from the key, the proof and the leaves byte for byte; docs/benchmarks.md has the commands. The output had no key path: its internal key is BIP341's unspendable point.
 

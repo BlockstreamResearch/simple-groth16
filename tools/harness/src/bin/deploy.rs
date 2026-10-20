@@ -1,8 +1,10 @@
 // deploy: the taproot output of a program and the transactions that spend it.
 //
 //   deploy compile <program.simpl> <out>
-//       parse (minutes for a large program) and finalize without pruning; writes <out>.uprog, the consensus
-//       encoding of the unpruned program, which the other commands decode in a second; prints the CMR
+//       parse (minutes for a large program); writes <out>.uprog, the consensus encoding of the unpruned
+//       program (its witness nodes each kept apart), which the other commands decode in a second, and
+//       <out>.wnames, the names of its witness nodes in the order the encoding reads their values; prints
+//       the CMR
 //   deploy address <program> <network> [--internal-key <x-only hex> | --secret <hex>]
 //       the CMR, the output key and the address of a taproot output with one Simplicity leaf (version 0xbe,
 //       script = the CMR) and the internal key (default: BIP341's unspendable point, i.e. no key path; with
@@ -38,10 +40,12 @@ use simplicity::elements::sighash::{Prevouts, SchnorrSighashType, SighashCache};
 use simplicity::elements::{bitcoin, EcdsaSighashType};
 use simplicity::elements::taproot::{TaprootBuilder, TaprootSpendInfo};
 use simplicity::elements::{confidential, Address, AddressParams, AssetId, BlockHash, LockTime, OutPoint, Script, Sequence, Transaction, TxIn, TxInWitness, TxOut, TxOutWitness, Txid, Witness};
+use simplicity::dag::{DagLike, MaxSharing};
 use simplicity::human_encoding::Forest;
 use simplicity::jet::elements::{ElementsEnv, ElementsUtxo};
+use simplicity::node::Inner;
 use simplicity::jet::Elements;
-use simplicity::{types, BitIter, BitMachine, BitWriter, Cmr, CommitNode, RedeemNode, Value};
+use simplicity::{types, BitIter, BitMachine, BitWriter, Cmr, CommitNode, RedeemNode};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -100,6 +104,22 @@ fn parse_unpruned(path: &str) -> Arc<RedeemNode> {
     node
 }
 
+/// parse the human-readable program: its commitment (types finalized, no witness values), whose encoding
+/// keeps every witness node apart, and the names of the witness nodes in the order of that encoding
+fn parse_commit(path: &str) -> (Arc<CommitNode>, Vec<String>) {
+    let t0 = std::time::Instant::now();
+    let prog = std::fs::read_to_string(path).unwrap();
+    let forest = Forest::parse::<Elements>(&prog).expect("parse");
+    eprintln!("parsed in {:.1}s", t0.elapsed().as_secs_f64());
+    let main = forest.roots().get("main").expect("no main").clone();
+    let names = main.clone()
+        .post_order_iter::<MaxSharing<_>>()
+        .filter(|item| matches!(item.node.inner(), Inner::Witness(_)))
+        .map(|item| item.node.name().to_string())
+        .collect();
+    (main.to_commit_node(), names)
+}
+
 /// the CMR of a program given as .uprog, .simpl or hex
 fn program_cmr(arg: &str) -> [u8; 32] {
     if arg.len() == 64 && arg.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -113,23 +133,27 @@ fn program_cmr(arg: &str) -> [u8; 32] {
     parse_unpruned(arg).cmr().to_byte_array()
 }
 
-/// the unpruned program with the witness bound: from .uprog + the witness spec, or the .simpl text
+/// the unpruned program with the witness bound: from .uprog (and .wnames beside it) + the witness spec,
+/// or the .simpl text
 fn program_with_witness(arg: &str, witness_path: &str) -> Arc<RedeemNode> {
-    let w = witness::load_single(witness_path);
+    let witness = witness::load(witness_path);
     if arg.ends_with(".uprog") {
         let p = std::fs::read(arg).unwrap();
+        let names_path = format!("{}.wnames", arg.trim_end_matches(".uprog"));
+        let names: Vec<String> = serde_json::from_str(&std::fs::read_to_string(&names_path).expect("the .wnames of the program")).unwrap();
         let mut wbytes = Vec::new();
         {
             let mut bw = BitWriter::new(&mut wbytes);
-            simplicity::encode_value(&w, &mut bw).unwrap();
+            for name in &names { // the values in the order the encoding reads them
+                let v = witness.get(name.as_str()).unwrap_or_else(|| panic!("no value for witness node {}", name));
+                simplicity::encode_value(v, &mut bw).unwrap();
+            }
             bw.flush_all().unwrap();
         }
         return RedeemNode::decode::<_, _, Elements>(BitIter::from(p.iter().cloned()), BitIter::from(wbytes.iter().cloned())).expect("decode with witness");
     }
     let t0 = std::time::Instant::now();
     let prog = std::fs::read_to_string(arg).unwrap();
-    let mut witness: HashMap<Arc<str>, Value> = HashMap::new();
-    witness.insert(Arc::from("w_in"), w);
     let node = types::Context::with_context(|ctx| {
         let forest = Forest::parse::<Elements>(&prog).expect("parse");
         eprintln!("parsed in {:.1}s", t0.elapsed().as_secs_f64());
@@ -220,10 +244,11 @@ fn main() {
     let internal_key = internal_key.as_str();
     match cmd {
         "compile" => {
-            let node = parse_unpruned(&pos[1]);
+            let (node, names) = parse_commit(&pos[1]);
             let p = node.to_vec_without_witness();
             std::fs::write(format!("{}.uprog", pos[2]), &p).unwrap();
-            println!("{{\"cmr\":\"{}\",\"unpruned_bytes\":{}}}", hex(&node.cmr().to_byte_array()), p.len());
+            std::fs::write(format!("{}.wnames", pos[2]), serde_json::to_string(&names).unwrap()).unwrap();
+            println!("{{\"cmr\":\"{}\",\"unpruned_bytes\":{},\"witness_nodes\":{}}}", hex(&node.cmr().to_byte_array()), p.len(), names.len());
         }
         "address" => {
             let cmr = program_cmr(&pos[1]);

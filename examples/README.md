@@ -16,17 +16,17 @@ tools/harness/target/release/hand examples/fp_mul.simpl examples/fp_mul.w0.json 
 
 ## multiplier/
 
-The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending transaction) and the files of one spend on an Elements regtest node, transaction `ecc9764f…`, which proves c = 21.
+The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending transaction) and the files of one spend on an Elements regtest node, transaction `9f4c1cb0…`, which proves c = 21.
 
 | file | |
 |---|---|
 | `verification_key.json` | the snarkjs key |
-| `verifier.simpl.gz` | the generated program, 1.6 MB of text |
-| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `5f7e53df…4b465c01` |
+| `verifier.simpl.gz` | the generated program, 1.1 MB of text |
+| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `c910831b…26b0be62` |
 | `proof.json`, `public.json` | the snarkjs proof and its public signal |
 | `leaves.json` | the two leaves behind the public signal: the transaction's sighash and c |
-| `verifier.w0.json.gz` | the witness: proof, hints, Merkle sibling, padding |
+| `verifier.w0.json.gz` | the witness: proof, Miller values, slopes, quotient, Merkle sibling |
 
 `tools/groth16_snarkjs.py` regenerates the program and the witness from the key, the proof and the leaves byte for byte; docs/benchmarks.md has the commands. The output had no key path: its internal key is BIP341's unspendable point.
 
-The verifier spent on Liquid testnet ([`f25a6e90…`](https://blockstream.info/liquidtestnet/tx/f25a6e90417c427f25c1d6883869825f30ec111a357b0e550bf24a20725d3cdb)) was an earlier version of this program, without the G2 membership check.
+The verifier spent on Liquid testnet ([`f25a6e90…`](https://blockstream.info/liquidtestnet/tx/f25a6e90417c427f25c1d6883869825f30ec111a357b0e550bf24a20725d3cdb)) was an earlier version of this program: the Miller loop computed in the tower, without the G2 membership check.

@@ -14,6 +14,7 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 
 - BN254 field arithmetic runs on the secp256k1 field and scalar jets. A product of two BN254 elements is computed exactly modulo both secp256k1 primes, then reduced with [Montgomery reduction](https://en.wikipedia.org/wiki/Montgomery_modular_multiplication) carried out in CRT form.
 - Curve arithmetic needs no inversions. Adding or doubling points normally divides to get the slope of a line; here the prover puts every slope in the witness, and the program checks it with a multiplication: `λ * (x2 - x1) = y2 - y1` for an addition, `λ * 2y = 3x^2` for a doubling.
+- There is no arithmetic in F_p12. The prover writes every intermediate value of the Miller loop into the witness, and the program checks all 88 steps at once, as one polynomial identity at a random point chosen by hashing the witness ([Fiat–Shamir](https://en.wikipedia.org/wiki/Fiat%E2%80%93Shamir_heuristic) with SHA-256), so a product in F_p12 costs one product in F_p.
 - There is no final exponentiation. The prover supplies a [residue witness](https://eprint.iacr.org/2024/640) (Novakovic and Eagen, 2024), and the program checks a short identity instead.
 - The key is compiled in. The lines of gamma and delta are constants, the IC points become lookup tables, and $e(\alpha, \beta)$ is folded into the final comparison.
 - The circuit requires a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0. The program recomputes that root from its `sig_all_hash` jet, so a proof spends exactly one transaction and cannot be replayed or redirected.
@@ -24,12 +25,12 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 
 | | |
 |---|---|
-| program cost, one public signal, padded | 371.8 M mWU |
-| transaction | 382.2 kWU, 95.6 kvB |
-| pruned program / witness | 161 kB / 220 kB |
-| fee at 0.115 sat/vB | ~ 11,000 sat |
+| program cost, one public signal | 81.7 M mWU |
+| transaction | 107.4 kWU, 26.9 kvB |
+| pruned program / witness | 61 kB / 45 kB |
+| fee at 0.115 sat/vB | ~ 3,100 sat |
 
-The standard transaction limit is 400 kWU, so it's on the border.
+The program's bytes earn more budget than it costs, so it needs no padding. The transaction is about a quarter of the 400 kWU standard limit.
 
 ## Quick start
 
@@ -112,15 +113,15 @@ The program sees only the root, not the values behind it. A contract that must a
 
 | | |
 |---|---|
-| `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `tower.py`, `curve.py`, `miller.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal) |
+| `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `poly.py`, `curve.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal) |
 | `circuits/` | `public_merkle.circom` (the public-signal convention) and the toy `multiplier.circom` |
-| `tools/harness/` | Rust: `hand` runs generated programs for the tests, `deploy` builds addresses and transactions |
+| `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` profiles them, `deploy` builds addresses and transactions |
 | `tools/` | `groth16_snarkjs.py` (snarkjs key and proof to program and witness), `circom_demo.py` and `regtest.sh` |
 | `tests/` | tests (plus `test_bn254_ref.py` against py_ecc) |
 | `examples/` | generated programs |
 | `docs/` | design notes and benchmarks|
 
-The repository has no hand-written Simplicity: each verifying key gives a different program (1.6 MB of text for the toy circuit), which the tools write into `build/`.
+The repository has no hand-written Simplicity: each verifying key gives a different program (1.1 MB of text for the toy circuit), which the tools write into `build/`.
 
 ## Credits
 

@@ -1,15 +1,16 @@
 """The Groth16 verifier: e(A, B) = e(alpha, beta) e(L, gamma) e(C, delta), L = IC_0 + sum a_i IC_i.
 
-The program checks e(-A, B) e(L, gamma) e(C, delta) e(alpha, beta) = 1 (pairing.py).  The verifying key
-is compiled in: the IC points become the MSM tables (curve.py), gamma and delta the line data of the
-loop (miller.py), and the Miller value of (alpha, beta) is folded into the final comparison.
+The program checks e(-A, B) e(L, gamma) e(C, delta) e(alpha, beta) = 1 as one polynomial identity
+(pairing.py).  The verifying key is compiled in: the IC points become the MSM tables (curve.py), gamma
+and delta the line constants of the loop, and the Miller value of (alpha, beta) the constant of the
+final relation.
 
-The witness, all words in Montgomery form (x R mod p, R = 2^256 - 2^32 - 977):
+The witness, all field words in Montgomery form (x R mod p, R = 2^256 - 2^32 - 977):
 
-    ((public inputs, MSM slopes), (((-A, B, C), (c, c^-1)), (s, slopes of B)))
+    ((public inputs, MSM slopes), the check's witness (pairing.witness_shape))
 
--A is given instead of A, so the program negates nothing; c, c^-1 and s are the residue witness.
-`witness` computes everything from a proof.  The public inputs are range-checked (a_i < r).
+-A is given instead of A, so the program negates nothing.  `witness` computes everything from a proof.
+The public inputs are range-checked (a_i < r).
 
 Transaction binding (depth > 0): the circuit's only public input is the SHA-256 Merkle root of its
 public values, with the sighash of the spending transaction as leaf 0 (merkle.py).  The witness carries
@@ -17,21 +18,21 @@ the siblings of leaf 0, and the program recomputes the root from its sig_all_has
 valid for this transaction only.
 
 Padding: a program's cost in mWU must not exceed 1000 times the size of its input's witness stack in
-bytes (plus 50).  The verifier costs more than its bytes earn, so the witness carries blocks of 512 zero
-bytes.  Elements does not relay transactions with an annex, where rust-simplicity would put such
-padding, so it goes into the witness itself.  Each block must be read by a jet to get a type (an unused
-witness gets the unit type), so it is hashed into a fresh SHA-256 context that is then dropped: about
-25.5 k mWU per block, 5% of the 512 WU it earns.
+bytes (plus 50).  The verifier's bytes earn more than it costs, so it needs no padding.  For programs
+that do, the witness can carry blocks of 512 zero bytes (Elements does not relay an annex, where
+rust-simplicity would put padding).  Each block must be read by a jet to get a type (an unused witness
+gets the unit type), so it is hashed into a fresh SHA-256 context that is then dropped: about 25.5 k mWU
+per block, 5% of the 512 WU it earns.
 
 The witness is the balanced pair of its parts: main, siblings, padding (those present).
 """
 from . import bn254, merkle
-from .fp import Fp, Val, WORD_MAX, to_mont
+from .fp import Fp, Val, to_mont
 from .sym import Sym, E, words, is_sym, SHA_CTX_W
 from .curve import Curve, MSM_X_HI, MSM_Y_HI
+from . import pairing
 from .pairing import PairingCheck
-from .miller import hint_words, bounds, N_STEPS
-from .dsl import ensure, wv, wbit, wpair, wbalanced, Tbalanced, balanced_paths
+from .dsl import ensure, wv, wpair, wbalanced, Tbalanced, balanced_paths
 
 PAD_BLOCK = Tbalanced(['2^512'] * 8) # 2^4096: 512 bytes
 PAD_BLOCK_COST = 25500 # mWU per block: its share of the witness node and of main's comp, init, read, add_512, drop
@@ -42,7 +43,7 @@ R = bn254.R
 
 class Groth16:
     """Generator of the verifier of vk = dict(alpha, beta, gamma, delta, ic) (bn254 points).  w: MSM
-    window width in bits; b: miller.bounds(); depth: depth of the public-signal Merkle tree (0: no
+    window width in bits; b: pairing.bounds(); depth: depth of the public-signal Merkle tree (0: no
     transaction binding)."""
 
     def __init__(self, fp, vk, w=5, nbits=254, b=None, pad_blocks=0, depth=0):
@@ -64,13 +65,10 @@ class Groth16:
         ensure(len(inputs) == self.n and all(0 <= a < R for a in inputs), 'public inputs')
         msm_hints, L = Curve.msm_hints(self.start, inputs, self.tables, self.w, self.nbits)
         nA = bn254.g1_neg(A)
-        res = self.pc.witness([(nA, B), (L, self.vk['gamma']), (C, self.vk['delta'])])
-        if res is None:
+        wit = self.pc.prover.witness([(nA, B), (L, self.vk['gamma']), (C, self.vk['delta'])], inputs)
+        if wit is None:
             return None
-        c, cinv, s = res
-        wit = dict(scalars=list(inputs), msm_hints=[to_mont(h) for hi in msm_hints for h in hi],
-                   points=[to_mont(v) for v in (nA[0], nA[1], B[0].c0, B[0].c1, B[1].c0, B[1].c1, C[0], C[1])],
-                   c=c, cinv=cinv, s=s, hints=hint_words(B))
+        wit.update(scalars=list(inputs), msm_hints=[to_mont(h) for hi in msm_hints for h in hi])
         if self.depth:
             ensure(len(siblings) == self.depth, 'number of siblings')
             wit['sighash'] = int.from_bytes(merkle.leaf(sighash), 'big')
@@ -93,29 +91,23 @@ class Groth16:
     def witness_type(self):
         """The witness type, in the human-readable encoding."""
         T = lambda k: Tbalanced(['2^256'] * k)
-        main = (f'(({T(self.n)} * {T(self.n * self.nwin)}) * (({T(8)} * ({T(12)} * {T(12)})) * '
-                f'((2 * 2) * {Tbalanced(["(2^256 * 2^256)"] * N_STEPS)})))')
+        main = f'(({T(self.n)} * {T(self.n * self.nwin)}) * {pairing.witness_type()})'
         parts = dict(main=lambda: main, siblings=lambda: T(self.depth), pad=lambda: Tbalanced([PAD_BLOCK] * self.pad_blocks))
         return Tbalanced([parts[p]() for p in self._parts()])
 
     def witness_bits(self):
-        return 256 * (self.n + self.n * self.nwin + 32) + 2 + 512 * N_STEPS + 256 * self.depth + 4096 * self.pad_blocks
+        return 256 * (self.n + self.n * self.nwin + self.depth) + pairing.witness_bits() + 4096 * self.pad_blocks
 
     def witness_value(self, wit):
         """The witness dict as a harness value spec (tools/harness)."""
         W = lambda ws: wbalanced([wv(256, x) for x in ws])
-        main = wpair(wpair(W(wit['scalars']), W(wit['msm_hints'])),
-                     wpair(wpair(W(wit['points']), wpair(W(wit['c']), W(wit['cinv']))),
-                           wpair(wpair(wbit(wit['s'] >> 1), wbit(wit['s'] & 1)),
-                                 wbalanced([wpair(wv(256, lx), wv(256, ly)) for lx, ly in wit['hints']]))))
+        main = wpair(wpair(W(wit['scalars']), W(wit['msm_hints'])), pairing.witness_value(wit))
         parts = dict(main=lambda: main, siblings=lambda: W(wit['siblings']),
                      pad=lambda: wbalanced([wbalanced([wv(512, 0)] * 8) for _ in range(self.pad_blocks)]))
         return wbalanced([parts[p]() for p in self._parts()])
 
     def witness_shape(self, pad=True):
-        bit = lambda: E('', 1, 0)
-        main = [[words(self.n), words(self.n * self.nwin)],
-                [[words(8), [words(12), words(12)]], [[bit(), bit()], [E('', 512, 0) for _ in range(N_STEPS)]]]]
+        main = [[words(self.n), words(self.n * self.nwin)], pairing.witness_shape()]
         parts = dict(main=main, siblings=words(self.depth), pad=[E('', 4096, 0) for _ in range(self.pad_blocks)])
         return [parts[p] for p in self._parts() if pad or p != 'pad']
 
@@ -149,11 +141,9 @@ class Groth16:
     def checks(self, accs):
         """The pairing check on (-A, B, C) and L from the MSM state, and the range checks of the inputs."""
         be, cv = self.be, self.cv
-        (x, y, scalars), (_, ((pts, (c, cinv)), (sel, hints))) = accs
-        V = lambda a: Val(a, WORD_MAX)
+        (x, y, scalars), (_, ((pts, (c, ci)), ((sel, rz), (leaves, q)))) = accs
         L = (Val(x, MSM_X_HI), Val(y, MSM_Y_HI))
-        chk = self.pc.program((V(pts[0]), V(pts[1])), tuple(V(a) for a in pts[2:6]), (V(pts[6]), V(pts[7])), L,
-                              [V(a) for a in c], [V(a) for a in cinv], be.subtree(sel), be.subtree(hints))
+        chk = self.pc.program({'L': L, 'words': scalars}, pts, c, ci, sel, rz, leaves, q)
         ranges = [cv.lt_const_check(Val(a, 0), R) for a in scalars]
         if not is_sym(be):
             return 0
@@ -197,7 +187,7 @@ class Groth16:
 
     def num_input(self, wit):
         """The witness dict as the nested value `verify` takes on the numeric backend."""
-        main = [[wit['scalars'], wit['msm_hints']], [[wit['points'], [wit['c'], wit['cinv']]], [[wit['s'] >> 1, wit['s'] & 1], wit['hints']]]]
+        main = [[wit['scalars'], wit['msm_hints']], pairing.witness_num(wit)]
         parts = dict(main=main, siblings=[wit.get('sighash'), wit.get('siblings')], pad=[0] * self.pad_blocks)
         return [parts[p] for p in self._parts()]
 
@@ -215,7 +205,7 @@ class Groth16:
     def compile(cls, vk, w=5, pad_blocks=0, depth=0, b=None):
         """The verifier of a key: (program text, its generator, cost bound in mWU)."""
         be = Sym(0)
-        g = cls(Fp(be), vk, w, b=b or bounds(), pad_blocks=pad_blocks, depth=depth)
+        g = cls(Fp(be), vk, w, b=b or pairing.bounds(), pad_blocks=pad_blocks, depth=depth)
         body = g.program()
         be.em.define('w_in', 'witness', f'_ -> {g.witness_type()}')
         be.em.define('main', f'comp w_in ({body.t})')

@@ -1,57 +1,17 @@
 #!/usr/bin/env python3
-"""The G2 membership check (Miller.g2_check): after the loop, T must equal -psi^3(B).  The program runs
-the plain Miller loop and the check, and compares f with the reference, so that a point outside G2 can
-only fail on the check.  B in G2 must pass; B plus a point of order 10069, and a random point of the
-twist, must be rejected.
+"""The G2 membership check (groth/pairing.py): after the loop, B's point at z must equal -psi^3(B) at z.
+For B on the twist, every other relation is made to hold: the Miller values are B's, the residue
+witness is c = 1, s = 0, and the constant of the check is chosen as the inverse of the Miller value.
+So a point outside G2 can only fail on the two G2 relations.  B in G2 must pass; B plus a point of order
+10069, and a random point of the twist, must be rejected.
 
     python3 tests/test_g2_check.py
 """
 import math, os, random, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B, miller as M
-from groth.dsl import CheckFailed, wv, wpair, wbalanced, Tbalanced, balanced_paths
-from groth.sym import Sym, Num, words
+from groth import bn254 as B, poly, pairing as PC
+from test_pairing import program, witness, INPUT
 import harness
-
-N = M.N_STEPS
-
-
-def point_words(A, Bq, C, L):
-    return [F.to_mont(v) for v in (A[0], A[1], Bq[0].c0, Bq[0].c1, Bq[1].c0, Bq[1].c1, C[0], C[1], L[0], L[1])]
-
-
-def numeric(gamma, delta, pw, hw, b):
-    """the loop and the check on the numeric backend: (f words, whether the check passed)"""
-    fp = F.Fp(Num())
-    m = M.Miller(fp, gamma, delta, b)
-    v = [F.Val(w, F.WORD_MAX) for w in pw]
-    f, T, K = m.loop(m.initial_state((v[0], v[1]), tuple(v[2:6]), (v[6], v[7]), (v[8], v[9])), hw)
-    try:
-        m.g2_check(T, K)
-        return f, True
-    except CheckFailed:
-        return f, False
-
-
-def program(gamma, delta, f_words, b):
-    """the loop, the check, and f compared with f_words"""
-    be = Sym(256 * 10 + 512 * N); fp = F.Fp(be)
-    m = M.Miller(fp, gamma, delta, b)
-    ins = [F.Val(be.proj('O' + p, 256), F.WORD_MAX) for p in balanced_paths(10)]
-    state0 = m.initial_state((ins[0], ins[1]), tuple(ins[2:6]), (ins[6], ins[7]), (ins[8], ins[9]))
-    final = m.loop(state0, be.proj('IH', 512 * N))
-
-    def body(accs):
-        f, T, K = accs
-        return be.checks([m.g2_check(T, K)] + [fp.assert_eq_word(F.Val(a, 0), w) for a, w in zip(f, f_words)])
-    main = be.with_env(final, [words(12), words(4), words(12)], body)
-    be.em.define('w_in', 'witness', f'_ -> ({Tbalanced(["2^256"] * 10)} * {Tbalanced(["(2^256 * 2^256)"] * N)})')
-    be.em.define('main', f'comp w_in ({main.t})')
-    return be.em.text(), 2 * (100 + 256 * 10 + 512 * N) + main.c, m
-
-
-def witness(pw, hw):
-    return {'w_in': {'p': [wbalanced([wv(256, w) for w in pw]), wbalanced([wpair(wv(256, x), wv(256, y)) for x, y in hw])]}}
 
 
 COFACTOR_PRIMES = [10069, 5864401, 1875725156269, 197620364512881247228717050342013327560683201906968909]
@@ -85,25 +45,24 @@ def main():
     small = B.g2_mul_unreduced(B.g2_random_point(rng), B.R * h // 10069) # order 10069
     cases = [('B in G2', good, True), ('B + order-10069 point', B.g2_add(good, small), False),
              ('random twist point', B.g2_random_point(rng), False)]
-    b = M.bounds()
+    b = PC.bounds()
     for label, Bq, in_g2 in cases:
         assert B.g2_on_curve(*Bq) and B.g2_in_subgroup(Bq) == in_g2
-        pw, hw = point_words(A, Bq, C, L), M.hint_words(Bq)
-        f_words, passed = numeric(gamma, delta, pw, hw, b)
-        assert passed == in_g2, (label, 'numeric model')
-        text, estimate, m = program(gamma, delta, f_words, b)
-        r = harness.run('g2_check', text, witness(pw, hw))
+        pairs = [(A, Bq), (L, gamma), (C, delta)]
+        prover = PC.Prover(gamma, delta, B.multi_miller_loop_affine(pairs).inv())
+        w = prover.witness(pairs, [INPUT], residue=(B.Fp12.one(), 0), check=False)
+        rels = PC.relations(PC.PolyRing, w['values'], prover.lines, prover.table)
+        failing = [k for k, rel in enumerate(rels) if any(poly.reduce(rel))]
+        assert failing == ([] if in_g2 else [PC.N_RELS - 3, PC.N_RELS - 2]), (label, failing)
+        text, estimate, _ = program(gamma, delta, prover.const, b)
+        r = harness.run('g2_check', text, witness(L, w))
         if in_g2:
             harness.expect_ok(r, label)
             assert r['cost'] == estimate, (r['cost'], estimate)
-            fp = F.Fp(Sym(0))
-            mc = M.Miller(fp, gamma, delta, b)
-            check = mc.g2_check([fp.be.proj(p, 256) for p in balanced_paths(4, 'O')],
-                                [fp.be.proj(p, 256) for p in balanced_paths(12, 'I')])
-            print(f'{label:24} accepted  (program cost {r["cost"]:,} mWU, the check alone about {check.c:,})')
+            print(f'{label:24} accepted')
         else:
             assert not r.get('ok') and r.get('stage') in ('exec', 'finalize'), (label, r)
-            print(f'{label:24} rejected as expected')
+            print(f'{label:24} rejected: only its two G2 relations fail')
     print('all ok')
 
 

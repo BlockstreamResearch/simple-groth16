@@ -21,7 +21,7 @@
 # then `elements-cli createwallet w` and `elements-cli rescanblockchain` to claim the free coins.
 #
 # Environment: ELEMENTS_CLI (default `elements-cli`, e.g. "elements-cli -datadir=..."), DEPLOY (the
-# deploy binary), FEE in satoshis (100000 is about 3.7 sat/vB for this 27 kvB transaction), SECRET (the
+# deploy binary), FEE in satoshis (100000 is about 7.5 sat/vB for this 13.3 kvB transaction), SECRET (the
 # key path's secret; demo only).
 set -euo pipefail
 OUT=${1:?build directory, e.g. build/multiplier}

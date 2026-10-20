@@ -42,12 +42,13 @@ Requirements:
 > Tested with rust-simplicity 0.9.0, Elements Core 23.3.1, circom 2.2.2, snarkjs 0.7.6, Python 3.10 to 3.14 and Node.js 22.
 
 ```sh
-cd tools/harness && cargo build --release && cd ../..   # builds hand and deploy
-python3 tests/test_fp.py                                 # field arithmetic
-python3 tests/test_groth16.py                            # the whole verifier
+make harness         # builds hand, deploy, costs and sizes (tools/harness)
+make test-fp         # field arithmetic
+make test-groth16    # the whole verifier
+make -j4 test        # all tests, in parallel
 ```
 
-Each test generates programs for one layer, runs them through `hand` (which executes them the way a node does) and compares every result with the plain-Python model. `tests/test_bn254_ref.py` needs `pip install py_ecc`.
+Each test generates programs for one layer, runs them through `hand` (which executes them the way a node does) and compares every result with the plain-Python model. `make test-bn254_ref` checks the reference code against py_ecc (`pip install py_ecc`).
 
 ## How it works and a toy example
 
@@ -105,7 +106,7 @@ python3 tools/groth16_snarkjs.py program verification_key.json --values n --out 
 python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public.json --leaves leaves.json --out build/x
 ```
 
-`leaves.json` is `{"sighash": "<64 hex digits>", "values": ["<decimal>", ...]}`, with the sighash from `deploy sighash` and the values in circuit order. Without `--values`, each public signal becomes a verifier input (8.7 M mWU each) and nothing binds the proof to the transaction.
+`leaves.json` is `{"sighash": "<64 hex digits>", "values": ["<decimal>", ...]}`, with the sighash from `deploy sighash` and the values in circuit order. Without `--values`, each public signal becomes a verifier input (about 6.6 M mWU and 14 kB each) and nothing binds the proof to the transaction.
 
 The program sees only the root, not the values behind it. A contract that must act on a value, say an address the proof commits to, would have to open that leaf as well; the generator does not do that yet.
 
@@ -115,13 +116,18 @@ The program sees only the root, not the values behind it. A contract that must a
 |---|---|
 | `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `poly.py`, `curve.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal) |
 | `circuits/` | `public_merkle.circom` (the public-signal convention) and the toy `multiplier.circom` |
-| `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` profiles them, `deploy` builds addresses and transactions |
+| `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` and `sizes` profile them, `deploy` builds addresses and transactions |
 | `tools/` | `groth16_snarkjs.py` (snarkjs key and proof to program and witness), `circom_demo.py` and `regtest.sh` |
 | `tests/` | tests (plus `test_bn254_ref.py` against py_ecc) |
 | `examples/` | generated programs |
-| `docs/` | design notes and benchmarks|
+| `docs/` | design notes and benchmarks |
+| `Makefile`, `pyproject.toml` | development tasks, the linters' configuration |
 
-The repository has no hand-written Simplicity: each verifying key gives a different program (1.1 MB of text for the toy circuit), which the tools write into `build/`.
+The repository has no hand-written Simplicity: each verifying key gives a different program (2.8 MB of text for the toy circuit), which the tools write into `build/`.
+
+## Development
+
+`make lint` runs what CI checks besides the tests: ruff, mypy, `cargo fmt --check` and clippy (`pip install -e '.[dev]'` installs the Python tools). `make fmt` formats the code. `make example` checks that the files in `examples/` regenerate byte for byte, so a change that alters the generated program shows up there.
 
 ## Credits
 

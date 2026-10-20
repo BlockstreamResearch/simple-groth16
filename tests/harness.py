@@ -1,6 +1,11 @@
 """Run generated programs through tools/harness `hand`, which parses, prunes, executes, serialises,
 decodes and executes again, and reports the cost bound and the sizes."""
-import json, os, subprocess, sys, time
+
+import json
+import os
+import subprocess
+import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, '..')

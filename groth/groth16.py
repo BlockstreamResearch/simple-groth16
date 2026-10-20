@@ -20,44 +20,54 @@ public values, with the sighash of the spending transaction as leaf 0 (merkle.py
 the siblings of leaf 0, and the program recomputes the root from its sig_all_hash jet, so the proof is
 valid for this transaction only.
 
-Padding: a program's cost in mWU must not exceed 1000 times the size of its input's witness stack in
-bytes (plus 50).  The verifier's bytes earn more than it costs, so it needs no padding.  For programs
-that do, the witness can carry blocks of 512 zero bytes (Elements does not relay an annex, where
-rust-simplicity would put padding).  Each block must be read by a jet to get a type (an unused witness
-gets the unit type), so it is hashed into a fresh SHA-256 context that is then dropped: about 25.5 k mWU
-per block, 5% of the 512 WU it earns.
-
-The witness is the balanced pair of its parts: main, siblings, padding (those present).
+The witness node w_in is the balanced pair of main and, with a binding, the siblings.
 """
-from . import bn254, merkle
-from .fp import Fp, Val
-from .sym import Sym, E, words, is_sym, SHA_CTX_W
-from .curve import Curve
-from . import pairing
-from .pairing import PairingCheck
-from .dsl import ensure, wv, wpair, wbalanced, Tbalanced, balanced_paths
 
-PAD_BLOCK = Tbalanced(['2^512'] * 8) # 2^4096: 512 bytes
-PAD_BLOCK_COST = 25500 # mWU per block: its share of the witness node and of main's comp, init, read, add_512, drop
-SHA_PAD64 = (0x80 << 504) | 512 # the second SHA-256 block of a 64-byte message: 0x80, zeros, the bit length
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+from . import bn254, merkle, pairing
+from .curve import Curve
+from .dsl import CheckFailed, Tbalanced, WSpec, balanced_paths, ensure, wbalanced, wpair, wv
+from .fp import Fp, Val
+from .pairing import PairingCheck
+from .sym import E, Sym, Term, is_sym, words
+
+SHA_PAD64 = (0x80 << 504) | 512  # the second SHA-256 block of a 64-byte message: 0x80, zeros, the bit length
 
 R = bn254.R
+VerifyingKey = dict[str, Any]  # alpha, beta, gamma, delta (bn254 points) and ic (a list of G1 points)
+Proof = tuple[bn254.G1Point, bn254.G2Point, bn254.G1Point]
 
 
 class Groth16:
     """Generator of the verifier of vk = dict(alpha, beta, gamma, delta, ic) (bn254 points).  b:
     pairing.bounds(); depth: depth of the public-signal Merkle tree (0: no transaction binding)."""
 
-    def __init__(self, fp, vk, b=None, pad_blocks=0, depth=0):
+    def __init__(self, fp: Fp, vk: VerifyingKey, b: dict[str, int] | None = None, depth: int = 0) -> None:
         self.fp, self.be = fp, fp.be
         self.cv = Curve(fp)
-        self.vk, self.pad_blocks, self.depth = vk, pad_blocks, depth
+        self.vk, self.depth = vk, depth
         self.n = len(vk['ic']) - 1
-        self.pc = PairingCheck(fp, vk['delta'], bn254.multi_miller_loop_affine([(vk['alpha'], vk['beta'])]),
-                               pairing.gt_constants(vk['ic'], vk['gamma']), b)
+        ensure(self.n >= 1, 'the key has no public input')
+        self.pc = PairingCheck(
+            fp,
+            vk['delta'],
+            bn254.multi_miller_loop_affine([(vk['alpha'], vk['beta'])]),
+            pairing.gt_constants(vk['ic'], vk['gamma']),
+            b,
+        )
 
     # prover side
-    def witness(self, proof, inputs, sighash=None, siblings=None):
+    def witness(
+        self,
+        proof: Proof,
+        inputs: Sequence[int],
+        sighash: bytes | int | None = None,
+        siblings: Sequence[bytes | int] | None = None,
+    ) -> dict[str, Any] | None:
         """The witness of the proof (A, B, C) for the public inputs, as a dict; None if the proof does not
         verify.  With a binding, also the sighash (leaf 0) and its siblings (merkle.siblings), which must
         give the first input."""
@@ -68,7 +78,8 @@ class Groth16:
             return None
         wit.update(scalars=list(inputs))
         if self.depth:
-            ensure(len(siblings) == self.depth, 'number of siblings')
+            if sighash is None or siblings is None or len(siblings) != self.depth:
+                raise CheckFailed('the sighash and its siblings')
             wit['sighash'] = int.from_bytes(merkle.leaf(sighash), 'big')
             wit['siblings'] = [int.from_bytes(merkle.leaf(x), 'big') for x in siblings]
             if self.root(wit['sighash'], wit['siblings']) != inputs[0]:
@@ -76,68 +87,62 @@ class Groth16:
         return wit
 
     @staticmethod
-    def root(sighash, siblings):
+    def root(sighash: bytes | int, siblings: Sequence[bytes | int]) -> int:
         """The public input that the siblings of leaf 0 bind to the sighash."""
         h = merkle.leaf(sighash)
         for s in siblings:
             h = merkle.node(h, merkle.leaf(s))
         return merkle.public_signal(h)
 
-    def _parts(self):
-        return ['main'] + (['siblings'] if self.depth else []) + (['pad'] if self.pad_blocks else [])
+    def _with_siblings(self, main: Any, siblings: Any) -> list[Any]:
+        """The parts of w_in: main, and the siblings if there is a binding."""
+        return [main, siblings] if self.depth else [main]
 
-    def witness_type(self):
-        """The witness type, in the human-readable encoding."""
-        T = lambda k: Tbalanced(['2^256'] * k)
-        main = f'({T(self.n)} * {pairing.witness_type(self.n)})'
-        parts = dict(main=lambda: main, siblings=lambda: T(self.depth), pad=lambda: Tbalanced([PAD_BLOCK] * self.pad_blocks))
-        return Tbalanced([parts[p]() for p in self._parts()])
+    def witness_type(self) -> str:
+        """The type of w_in, in the human-readable encoding."""
+        main = f'({_words_type(self.n)} * {pairing.witness_type()})'
+        return f'({main} * {_words_type(self.depth)})' if self.depth else main
 
-    def witness_bits(self):
+    def witness_bits(self) -> int:
         """The bits of the program's witness node, w_in."""
-        return 256 * (self.n + self.depth) + pairing.witness_bits(self.n) + 4096 * self.pad_blocks
+        return 256 * (self.n + self.depth) + pairing.witness_bits()
 
-    def all_witness_bits(self):
-        """With the witness nodes of their own (the pairing check's leaves and Q)."""
-        return self.witness_bits() + pairing.witness_node_bits(self.n)
-
-    def witness_value(self, wit):
+    def witness_value(self, wit: dict[str, Any]) -> dict[str, WSpec]:
         """The witness dict as harness value specs (tools/harness), by witness node: w_in, the leaves and Q."""
         W = lambda ws: wbalanced([wv(256, x) for x in ws])
         main = wpair(W(wit['scalars']), pairing.witness_value(wit))
-        parts = dict(main=lambda: main, siblings=lambda: W(wit['siblings']),
-                     pad=lambda: wbalanced([wbalanced([wv(512, 0)] * 8) for _ in range(self.pad_blocks)]))
-        return {'w_in': wbalanced([parts[p]() for p in self._parts()]), **pairing.witness_nodes(wit)}
+        w_in = wpair(main, W(wit['siblings'])) if self.depth else main
+        return {'w_in': w_in, **pairing.witness_nodes(wit)}
 
-    def witness_shape(self, pad=True):
-        main = [words(self.n), pairing.witness_shape(self.n)]
-        parts = dict(main=main, siblings=words(self.depth), pad=[E('', 4096, 0) for _ in range(self.pad_blocks)])
-        return [parts[p] for p in self._parts() if pad or p != 'pad']
+    def witness_shape(self) -> list[Any]:
+        return self._with_siblings([words(self.n), pairing.witness_shape()], words(self.depth))
+
+    def num_input(self, wit: dict[str, Any]) -> list[Any]:
+        """The witness dict as the nested value `verify` takes on the numeric backend."""
+        return self._with_siblings(
+            [wit['scalars'], pairing.witness_num(wit)], [wit.get('sighash'), wit.get('siblings')]
+        )
 
     # the verifier
-    def verify(self, acc):
+    def verify(self, acc: Any) -> Term:
         """All checks on the witness accessors `acc` (nested like witness_shape).  Sym: a unit-typed E
         over the witness environment; Num: runs the checks on the values."""
         be = self.be
-        parts = dict(zip(self._parts(), acc))
-        if is_sym(be): # in an environment of main alone
-            main_bits = self.witness_bits() - 256 * self.depth - 4096 * self.pad_blocks
-            out = be.with_env(be.proj(balanced_paths(len(self._parts()))[0], main_bits), self.witness_shape(pad=False)[0], self.checks)
+        if is_sym(be):  # in an environment of main alone
+            main_bits = self.witness_bits() - 256 * self.depth
+            out = be.with_env(be.proj(balanced_paths(len(acc))[0], main_bits), self.witness_shape()[0], self.checks)
         else:
-            out = self.checks(parts['main'])
-        extra = []
+            out = self.checks(acc[0])
         if self.depth:
-            extra.append(self.binding(parts['main'][0][0], parts['siblings']))
-        if self.pad_blocks:
-            extra += self.consume_padding(parts['pad'])
-        if not is_sym(be):
-            return 0
-        return be.checks([out] + extra) if extra else out
+            bind = self.binding(acc[0][0][0], acc[1])
+            if is_sym(be):
+                out = be.checks([out, bind])
+        return out if is_sym(be) else 0
 
-    def checks(self, main):
+    def checks(self, main: Any) -> Term:
         """The pairing check on (-A, B, C) and the public inputs, and the range checks of the inputs."""
         be, cv = self.be, self.cv
-        if is_sym(be): # the leaves and Q are witness nodes of their own
+        if is_sym(be):  # the leaves and Q are witness nodes of their own
             (scalars, ((pts, ac), rz)), leaves, q = main, None, None
         else:
             scalars, ((pts, ac), (rz, (leaves, q))) = main
@@ -149,7 +154,7 @@ class Groth16:
         self.parts['range checks'] = sum(v.e.c for v in ranges)
         return be.checks([chk] + [v.e for v in ranges])
 
-    def binding(self, a1, siblings):
+    def binding(self, a1: Term, siblings: Any) -> Term:
         """The first public input equals the masked root of the path from the sig_all_hash jet through
         the siblings.  Num: siblings is (sighash, siblings)."""
         be = self.be
@@ -163,61 +168,51 @@ class Groth16:
 
         def masked(accs):
             hv, a = accs
-            top = be.jet('and_8', be.pair(be.sub(hv, 'OOOOO', 8), be.const(8, 0x1f)), 8)
-            m = be.pair(be.pair(be.pair(be.pair(be.pair(top, be.sub(hv, 'OOOOI', 8)), be.sub(hv, 'OOOI', 16)),
-                                        be.sub(hv, 'OOI', 32)), be.sub(hv, 'OI', 64)), be.sub(hv, 'I', 128))
+            top = be.jet('and_8', be.pair(be.sub(hv, 'OOOOO', 8), be.const(8, 0x1F)), 8)
+            m = be.pair(
+                be.pair(
+                    be.pair(
+                        be.pair(be.pair(top, be.sub(hv, 'OOOOI', 8)), be.sub(hv, 'OOOI', 16)), be.sub(hv, 'OOI', 32)
+                    ),
+                    be.sub(hv, 'OI', 64),
+                ),
+                be.sub(hv, 'I', 128),
+            )
             return be.verify(be.eq256(a, m))
+
         out = be.scope([h, a1], masked)
         self.parts['binding'] = out.c
         return out
 
-    def sha256_64(self, a, b):
+    def sha256_64(self, a: E, b: E) -> E:
         """SHA-256 of the 64-byte message a || b: two compressions."""
         be = self.be
         iv = be.jet('sha_256_iv', be.unit(), 256)
         m = be.jet('sha_256_block', be.pair(iv, be.pair(a, b)), 256)
         return be.jet('sha_256_block', be.pair(m, be.const(512, SHA_PAD64)), 256)
 
-    def program(self):
+    def program(self) -> E:
         """Sym: the unit-typed E of the whole verifier over the witness environment."""
         self.be.env[0] = self.witness_bits()
         return self.verify(self.be._unpack('', self.witness_shape()))
 
-    def num_input(self, wit):
-        """The witness dict as the nested value `verify` takes on the numeric backend."""
-        main = [wit['scalars'], pairing.witness_num(wit)]
-        parts = dict(main=main, siblings=[wit.get('sighash'), wit.get('siblings')], pad=[0] * self.pad_blocks)
-        return [parts[p] for p in self._parts()]
-
-    def consume_padding(self, blocks):
-        """One unit-typed E per padding block: the block is hashed into a fresh context, then dropped."""
-        be = self.be
-        out = []
-        for blk in blocks:
-            init = be.jet('sha_256_ctx_8_init', be.unit(), SHA_CTX_W)
-            ctx = be.jet('sha_256_ctx_8_add_512', be.pair(init, blk), SHA_CTX_W)
-            out.append(be.comp(ctx, be.unit()))
-        return out
-
     @classmethod
-    def compile(cls, vk, pad_blocks=0, depth=0, b=None):
+    def compile(cls, vk: VerifyingKey, depth: int = 0, b: dict[str, int] | None = None) -> tuple[str, Groth16, int]:
         """The verifier of a key: (program text, its generator, cost bound in mWU)."""
         be = Sym(0)
-        g = cls(Fp(be), vk, b=b or pairing.bounds(), pad_blocks=pad_blocks, depth=depth)
+        g = cls(Fp(be), vk, b=b or pairing.bounds(), depth=depth)
         body = g.program()
         be.em.define('w_in', 'witness', f'_ -> {g.witness_type()}')
         be.em.define('main', f'comp w_in ({body.t})')
         return be.em.text(), g, 2 * (100 + g.witness_bits()) + body.c
 
     @staticmethod
-    def padding(cost, program_bytes, witness_bytes, margin=512):
-        """Number of 512-byte padding blocks that make the input's budget cover the cost.  The budget is
-        1000 mWU per byte of the witness stack (program, witness, control block, length prefixes) plus
-        50; each block also adds PAD_BLOCK_COST.  The margin covers the CMR and small size changes."""
-        need = (cost + 999) // 1000 - 50 - (program_bytes + witness_bytes + 33 + 9) + margin
-        k = max(0, (need + 511) // 512)
-        return k + (k * PAD_BLOCK_COST + 511999) // 512000 # the blocks' own cost
-
-    @staticmethod
-    def budget_ok(cost, program_bytes, witness_bytes):
+    def budget_ok(cost: int, program_bytes: int, witness_bytes: int) -> bool:
+        """The input's budget, 1000 mWU per byte of its witness stack plus 50, covers the cost.  The stack is
+        counted low: the program, the witness, the control block (33 bytes) and 9 bytes of length prefixes,
+        without the CMR's 32 bytes."""
         return cost <= 1000 * (program_bytes + witness_bytes + 33 + 9 + 50)
+
+
+def _words_type(n: int) -> str:
+    return Tbalanced(['2^256'] * n)

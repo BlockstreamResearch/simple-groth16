@@ -32,20 +32,23 @@
 // <program> is a .uprog file, the .simpl text (parsed, slow) or, except for spend, the CMR in hex.  <network> is
 // elementsregtest, liquidtestnet or liquid; --genesis is the chain's `getblockhash 0`, needed on elementsregtest
 // where the genesis block depends on the node's configuration (the Liquid hashes are built in).
-use groth_harness::witness::{self, hex, hex_to_bytes};
 use groth_harness::env;
+use groth_harness::witness::{self, hex, hex_to_bytes};
+use simplicity::dag::{DagLike, MaxSharing};
 use simplicity::elements::encode::serialize_hex;
 use simplicity::elements::secp256k1_zkp as secp;
 use simplicity::elements::sighash::{Prevouts, SchnorrSighashType, SighashCache};
-use simplicity::elements::{bitcoin, EcdsaSighashType};
 use simplicity::elements::taproot::{TaprootBuilder, TaprootSpendInfo};
-use simplicity::elements::{confidential, Address, AddressParams, AssetId, BlockHash, LockTime, OutPoint, Script, Sequence, Transaction, TxIn, TxInWitness, TxOut, TxOutWitness, Txid, Witness};
-use simplicity::dag::{DagLike, MaxSharing};
+use simplicity::elements::{bitcoin, EcdsaSighashType};
+use simplicity::elements::{
+    confidential, Address, AddressParams, AssetId, AssetIssuance, BlockHash, LockTime, OutPoint, Script, Sequence,
+    Transaction, TxIn, TxInWitness, TxOut, TxOutSecrets, TxOutWitness, Txid, Witness,
+};
 use simplicity::human_encoding::Forest;
 use simplicity::jet::elements::{ElementsEnv, ElementsUtxo};
-use simplicity::node::Inner;
 use simplicity::jet::Elements;
-use simplicity::{types, BitIter, BitMachine, BitWriter, Cmr, CommitNode, RedeemNode};
+use simplicity::node::Inner;
+use simplicity::{types, BitIter, BitMachine, BitWriter, Cmr, CommitNode, RedeemNode, Value};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -53,6 +56,17 @@ use std::sync::Arc;
 const NUMS_KEY: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"; // BIP341's unspendable point
 const LIQUID_GENESIS: &str = "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003";
 const LIQUID_TESTNET_GENESIS: &str = "a771da8e52ee6ad581ed1e9a99825e5b3b7992225534eaa2ae23244fe26ab1c1";
+
+const USAGE: &str = "usage: deploy compile <program.simpl> <out>
+       deploy address <program> <network> [--internal-key <hex> | --secret <hex>]
+       deploy sighash <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>]
+       deploy spend <program> <witness.json> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>] [--save <out>]
+       deploy keyspend <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> --secret <hex> [--genesis <hash>]
+       deploy wallet <network> --secret <hex> [--blinding <hex>]
+       deploy send <network> <funding.hex> <vout> <dest> <sats> <fee> --secret <hex> [--blinding <hex>] [--change <address>]
+       deploy sighash dummy";
+
+type Flags = HashMap<String, String>;
 
 fn params(network: &str) -> &'static AddressParams {
     match network {
@@ -66,15 +80,18 @@ fn params(network: &str) -> &'static AddressParams {
 fn genesis(network: &str, flag: Option<&String>) -> BlockHash {
     let h = match (flag, network) {
         (Some(h), _) => h.as_str(),
-        (None, "liquid") | (None, "liquidv1") => LIQUID_GENESIS,
+        (None, "liquid" | "liquidv1") => LIQUID_GENESIS,
         (None, "liquidtestnet") => LIQUID_TESTNET_GENESIS,
-        _ => panic!("--genesis <hash> is needed on {} (elements-cli getblockhash 0)", network),
+        _ => panic!(
+            "--genesis <hash> is needed on {} (elements-cli getblockhash 0)",
+            network
+        ),
     };
     BlockHash::from_str(h).expect("genesis block hash")
 }
 
 /// positional arguments and --flag value options
-fn parse_args(args: &[String]) -> (Vec<String>, HashMap<String, String>) {
+fn parse_args(args: &[String]) -> (Vec<String>, Flags) {
     let mut pos = Vec::new();
     let mut flags = HashMap::new();
     let mut i = 0;
@@ -90,14 +107,34 @@ fn parse_args(args: &[String]) -> (Vec<String>, HashMap<String, String>) {
     (pos, flags)
 }
 
-/// parse the human-readable program and finalize it without pruning (unpopulated witness nodes get zero values)
-fn parse_unpruned(path: &str) -> Arc<RedeemNode> {
+/// the keypair of --secret
+fn keypair(flags: &Flags) -> secp::Keypair {
+    let secret = flags.get("secret").expect("--secret <hex>");
+    secp::Keypair::from_seckey_str(&secp::Secp256k1::new(), secret).expect("secret key")
+}
+
+/// the taproot internal key: --internal-key, the key of --secret, or BIP341's unspendable point
+fn internal_key(flags: &Flags) -> String {
+    match (flags.get("internal-key"), flags.get("secret")) {
+        (Some(k), _) => k.clone(),
+        (None, Some(_)) => keypair(flags).x_only_public_key().0.to_string(),
+        (None, None) => NUMS_KEY.to_string(),
+    }
+}
+
+fn cost_of(node: &RedeemNode) -> u64 {
+    node.bounds().cost.to_string().parse().unwrap()
+}
+
+/// parse the human-readable program and finalize it without pruning (witness nodes without a value get
+/// zero values)
+fn parse_text(path: &str, witness: &HashMap<Arc<str>, Value>) -> Arc<RedeemNode> {
     let t0 = std::time::Instant::now();
-    let prog = std::fs::read_to_string(path).unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
     let node = types::Context::with_context(|ctx| {
-        let forest = Forest::parse::<Elements>(&prog).expect("parse");
+        let forest = Forest::parse::<Elements>(&text).expect("parse");
         eprintln!("parsed in {:.1}s", t0.elapsed().as_secs_f64());
-        let node = forest.to_witness_node(&ctx, &HashMap::new()).expect("no main");
+        let node = forest.to_witness_node(&ctx, witness).expect("no main");
         node.finalize_unpruned().expect("finalize")
     });
     eprintln!("finalized in {:.1}s", t0.elapsed().as_secs_f64());
@@ -108,11 +145,12 @@ fn parse_unpruned(path: &str) -> Arc<RedeemNode> {
 /// keeps every witness node apart, and the names of the witness nodes in the order of that encoding
 fn parse_commit(path: &str) -> (Arc<CommitNode>, Vec<String>) {
     let t0 = std::time::Instant::now();
-    let prog = std::fs::read_to_string(path).unwrap();
-    let forest = Forest::parse::<Elements>(&prog).expect("parse");
+    let text = std::fs::read_to_string(path).unwrap();
+    let forest = Forest::parse::<Elements>(&text).expect("parse");
     eprintln!("parsed in {:.1}s", t0.elapsed().as_secs_f64());
     let main = forest.roots().get("main").expect("no main").clone();
-    let names = main.clone()
+    let names = main
+        .clone()
         .post_order_iter::<MaxSharing<_>>()
         .filter(|item| matches!(item.node.inner(), Inner::Witness(_)))
         .map(|item| item.node.name().to_string())
@@ -127,40 +165,45 @@ fn program_cmr(arg: &str) -> [u8; 32] {
     }
     if arg.ends_with(".uprog") || arg.ends_with(".prog") {
         let p = std::fs::read(arg).unwrap();
-        let node = CommitNode::decode::<_, Elements>(BitIter::from(p.iter().cloned())).expect("decode");
+        let node = CommitNode::decode::<_, Elements>(BitIter::from(p.iter().copied())).expect("decode");
         return node.cmr().to_byte_array();
     }
-    parse_unpruned(arg).cmr().to_byte_array()
+    parse_text(arg, &HashMap::new()).cmr().to_byte_array()
+}
+
+/// a program and its witness from their consensus encodings
+fn decode(program: &[u8], witness: &[u8]) -> Arc<RedeemNode> {
+    RedeemNode::decode::<_, _, Elements>(
+        BitIter::from(program.iter().copied()),
+        BitIter::from(witness.iter().copied()),
+    )
+    .expect("decode")
 }
 
 /// the unpruned program with the witness bound: from .uprog (and .wnames beside it) + the witness spec,
 /// or the .simpl text
 fn program_with_witness(arg: &str, witness_path: &str) -> Arc<RedeemNode> {
     let witness = witness::load(witness_path);
-    if arg.ends_with(".uprog") {
-        let p = std::fs::read(arg).unwrap();
-        let names_path = format!("{}.wnames", arg.trim_end_matches(".uprog"));
-        let names: Vec<String> = serde_json::from_str(&std::fs::read_to_string(&names_path).expect("the .wnames of the program")).unwrap();
-        let mut wbytes = Vec::new();
-        {
-            let mut bw = BitWriter::new(&mut wbytes);
-            for name in &names { // the values in the order the encoding reads them
-                let v = witness.get(name.as_str()).unwrap_or_else(|| panic!("no value for witness node {}", name));
-                simplicity::encode_value(v, &mut bw).unwrap();
-            }
-            bw.flush_all().unwrap();
-        }
-        return RedeemNode::decode::<_, _, Elements>(BitIter::from(p.iter().cloned()), BitIter::from(wbytes.iter().cloned())).expect("decode with witness");
+    if !arg.ends_with(".uprog") {
+        return parse_text(arg, &witness);
     }
-    let t0 = std::time::Instant::now();
-    let prog = std::fs::read_to_string(arg).unwrap();
-    let node = types::Context::with_context(|ctx| {
-        let forest = Forest::parse::<Elements>(&prog).expect("parse");
-        eprintln!("parsed in {:.1}s", t0.elapsed().as_secs_f64());
-        let node = forest.to_witness_node(&ctx, &witness).expect("no main");
-        node.finalize_unpruned().expect("finalize")
-    });
-    node
+    let p = std::fs::read(arg).unwrap();
+    let names_path = format!("{}.wnames", arg.trim_end_matches(".uprog"));
+    let names: Vec<String> =
+        serde_json::from_str(&std::fs::read_to_string(&names_path).expect("the .wnames of the program")).unwrap();
+    let mut wbytes = Vec::new();
+    {
+        let mut bw = BitWriter::new(&mut wbytes);
+        for name in &names {
+            // the values in the order the encoding reads them
+            let v = witness
+                .get(name.as_str())
+                .unwrap_or_else(|| panic!("no value for witness node {}", name));
+            simplicity::encode_value(v, &mut bw).unwrap();
+        }
+        bw.flush_all().unwrap();
+    }
+    decode(&p, &wbytes)
 }
 
 fn spend_info(cmr: &[u8; 32], internal_key: &str) -> (TaprootSpendInfo, Script, secp::XOnlyPublicKey) {
@@ -175,11 +218,48 @@ fn spend_info(cmr: &[u8; 32], internal_key: &str) -> (TaprootSpendInfo, Script, 
     (info, script, key)
 }
 
+/// an explicit output of sats of asset
+fn explicit_txout(asset: AssetId, sats: u64, script_pubkey: Script) -> TxOut {
+    TxOut {
+        asset: confidential::Asset::Explicit(asset),
+        value: confidential::Value::Explicit(sats),
+        nonce: confidential::Nonce::Null,
+        script_pubkey,
+        witness: TxOutWitness::default(),
+    }
+}
+
+/// a transaction with one input, spending previous_output, and the outputs
+fn tx_spending(previous_output: OutPoint, output: Vec<TxOut>) -> Transaction {
+    Transaction {
+        version: 2,
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output,
+            is_pegin: false,
+            script_sig: Script::new(),
+            sequence: Sequence::MAX,
+            asset_issuance: AssetIssuance::default(),
+            witness: TxInWitness::default(),
+        }],
+        output,
+    }
+}
+
 struct Spend {
     tx: Transaction,
     utxo: TxOut,
     info: TaprootSpendInfo,
     script: Script,
+}
+
+impl Spend {
+    fn control_block(&self) -> Vec<u8> {
+        self.info
+            .control_block(&(self.script.clone(), simplicity::leaf_version()))
+            .unwrap()
+            .serialize()
+    }
 }
 
 /// the transaction spending <txid>:<vout> (sats of asset, held by the verifier's output) to dest minus the fee
@@ -193,211 +273,290 @@ fn spend_tx(cmr: &[u8; 32], internal_key: &str, network: &'static AddressParams,
     let (info, script, key) = spend_info(cmr, internal_key);
     let secp_ctx = secp::Secp256k1::verification_only();
     let address = Address::p2tr(&secp_ctx, key, info.merkle_root(), None, network);
-    let utxo = TxOut {
-        asset: confidential::Asset::Explicit(asset),
-        value: confidential::Value::Explicit(sats),
-        nonce: confidential::Nonce::Null,
-        script_pubkey: address.script_pubkey(),
-        witness: TxOutWitness::default(),
-    };
-    let tx = Transaction {
-        version: 2,
-        lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: OutPoint { txid, vout },
-            is_pegin: false,
-            script_sig: Script::new(),
-            sequence: Sequence::MAX,
-            asset_issuance: Default::default(),
-            witness: TxInWitness::default(),
-        }],
-        output: vec![
-            TxOut {
-                asset: confidential::Asset::Explicit(asset),
-                value: confidential::Value::Explicit(sats.checked_sub(fee).expect("the fee exceeds the amount")),
-                nonce: confidential::Nonce::Null,
-                script_pubkey: dest.script_pubkey(),
-                witness: TxOutWitness::default(),
-            },
+    let utxo = explicit_txout(asset, sats, address.script_pubkey());
+    let paid = sats.checked_sub(fee).expect("the fee exceeds the amount");
+    let tx = tx_spending(
+        OutPoint { txid, vout },
+        vec![
+            explicit_txout(asset, paid, dest.script_pubkey()),
             TxOut::new_fee(fee, asset),
         ],
-    };
+    );
     Spend { tx, utxo, info, script }
 }
 
 /// the Simplicity environment of input 0 of the spend
 fn environment(spend: &Spend, cmr: &[u8; 32], genesis_hash: BlockHash) -> ElementsEnv<Arc<Transaction>> {
-    let control = spend.info.control_block(&(spend.script.clone(), simplicity::leaf_version())).unwrap();
-    ElementsEnv::new(Arc::new(spend.tx.clone()), vec![ElementsUtxo::from(spend.utxo.clone())], 0,
-                     Cmr::from_byte_array(*cmr), control, None, genesis_hash)
+    let control = spend
+        .info
+        .control_block(&(spend.script.clone(), simplicity::leaf_version()))
+        .unwrap();
+    ElementsEnv::new(
+        Arc::new(spend.tx.clone()),
+        vec![ElementsUtxo::from(spend.utxo.clone())],
+        0,
+        Cmr::from_byte_array(*cmr),
+        control,
+        None,
+        genesis_hash,
+    )
+}
+
+fn compile(pos: &[String]) {
+    let (node, names) = parse_commit(&pos[1]);
+    let p = node.to_vec_without_witness();
+    std::fs::write(format!("{}.uprog", pos[2]), &p).unwrap();
+    std::fs::write(format!("{}.wnames", pos[2]), serde_json::to_string(&names).unwrap()).unwrap();
+    println!(
+        "{{\"cmr\":\"{}\",\"unpruned_bytes\":{},\"witness_nodes\":{}}}",
+        hex(&node.cmr().to_byte_array()),
+        p.len(),
+        names.len()
+    );
+}
+
+fn address(pos: &[String], internal_key: &str) {
+    let cmr = program_cmr(&pos[1]);
+    let network = params(&pos[2]);
+    let (info, script, key) = spend_info(&cmr, internal_key);
+    let secp_ctx = secp::Secp256k1::verification_only();
+    let address = Address::p2tr(&secp_ctx, key, info.merkle_root(), None, network);
+    let control = info
+        .control_block(&(script, simplicity::leaf_version()))
+        .unwrap()
+        .serialize();
+    println!(
+        "{{\"cmr\":\"{}\",\"internal_key\":\"{}\",\"output_key\":\"{}\",\"address\":\"{}\",\"script_pubkey\":\"{}\",\"control_block\":\"{}\"}}",
+        hex(&cmr),
+        key,
+        info.output_key().into_inner(),
+        address,
+        hex(address.script_pubkey().as_bytes()),
+        hex(&control)
+    );
+}
+
+fn sighash(pos: &[String], flags: &Flags, internal_key: &str) {
+    let cmr = program_cmr(&pos[1]);
+    let network = params(&pos[2]);
+    let spend = spend_tx(&cmr, internal_key, network, &pos[3..]);
+    let env = environment(&spend, &cmr, genesis(&pos[2], flags.get("genesis")));
+    println!("{}", hex(env.c_tx_env().sighash_all().as_ref()));
+}
+
+fn spend(pos: &[String], flags: &Flags, internal_key: &str) {
+    let network = params(&pos[3]);
+    let t0 = std::time::Instant::now();
+    let (p, w, cmr, cost) = if pos[1].ends_with(".prog") {
+        // the pruned encodings saved by an earlier spend: decoded for the CMR and the cost, not executed
+        let p = std::fs::read(&pos[1]).unwrap();
+        let w = std::fs::read(&pos[2]).unwrap();
+        let decoded = decode(&p, &w);
+        let (cmr, cost) = (decoded.cmr().to_byte_array(), cost_of(&decoded));
+        (p, w, cmr, cost)
+    } else {
+        let unpruned = program_with_witness(&pos[1], &pos[2]);
+        let cmr = unpruned.cmr().to_byte_array();
+        eprintln!("program loaded in {:.1}s", t0.elapsed().as_secs_f64());
+        let spend = spend_tx(&cmr, internal_key, network, &pos[4..]);
+        let env = environment(&spend, &cmr, genesis(&pos[3], flags.get("genesis")));
+        let program = unpruned
+            .prune(&env)
+            .expect("the program fails on this witness and transaction");
+        let mut mac = BitMachine::for_program(&program).expect("machine");
+        mac.exec(&program, &env).expect("the pruned program fails");
+        let (p, w) = program.to_vec_with_witness();
+        eprintln!("pruned and executed in {:.1}s", t0.elapsed().as_secs_f64());
+        if let Some(out) = flags.get("save") {
+            std::fs::write(format!("{}.prog", out), &p).unwrap();
+            std::fs::write(format!("{}.wit", out), &w).unwrap();
+        }
+        (p, w, cmr, cost_of(&program))
+    };
+    let mut spend = spend_tx(&cmr, internal_key, network, &pos[4..]);
+    let control = spend.control_block();
+    let stack_bytes = p.len() + w.len() + 32 + control.len() + 4 + 1; // items with CompactSize prefixes
+    let budget = (stack_bytes + 50) * 1000;
+    spend.tx.input[0].witness.script_witness = Witness::from_slice(&[w.clone(), p.clone(), cmr.to_vec(), control]);
+    eprintln!(
+        "cost {} mWU, program {} bytes, witness {} bytes, witness stack {} bytes (budget {} mWU, covered: {}), tx weight {} WU",
+        cost,
+        p.len(),
+        w.len(),
+        stack_bytes,
+        budget,
+        cost <= budget as u64,
+        spend.tx.weight()
+    );
+    println!("{}", serialize_hex(&spend.tx));
+}
+
+fn wallet(pos: &[String], flags: &Flags) {
+    let network = params(&pos[1]);
+    let secp_ctx = secp::Secp256k1::new();
+    let pk = bitcoin::PublicKey::new(keypair(flags).public_key());
+    let blinder = flags
+        .get("blinding")
+        .map(|bk| secp::PublicKey::from_secret_key(&secp_ctx, &secp::SecretKey::from_str(bk).expect("blinding key")));
+    println!(
+        "{{\"pubkey\":\"{}\",\"address\":\"{}\",\"confidential_address\":\"{}\"}}",
+        pk,
+        Address::p2wpkh(&pk, None, network),
+        blinder
+            .map(|b| Address::p2wpkh(&pk, Some(b), network).to_string())
+            .unwrap_or_default()
+    );
+}
+
+fn send(pos: &[String], flags: &Flags) {
+    let network = params(&pos[1]);
+    let secp_ctx = secp::Secp256k1::new();
+    let keypair = keypair(flags);
+    let pk = bitcoin::PublicKey::new(keypair.public_key());
+    let funding_hex = std::fs::read_to_string(&pos[2]).unwrap();
+    let funding: Transaction =
+        simplicity::elements::encode::deserialize(&hex_to_bytes(funding_hex.trim())).expect("funding transaction hex");
+    let vout: u32 = pos[3].parse().expect("vout");
+    let utxo = funding.output[vout as usize].clone();
+    assert_eq!(
+        utxo.script_pubkey,
+        Address::p2wpkh(&pk, None, network).script_pubkey(),
+        "the output does not pay the key"
+    );
+    let dest = Address::parse_with_params(&pos[4], network).expect("destination address");
+    let sats: u64 = pos[5].parse().expect("amount in satoshis");
+    let fee: u64 = pos[6].parse().expect("fee in satoshis");
+    // the input: explicit, or unblinded with the blinding key
+    let secrets = match (utxo.value, utxo.asset) {
+        (confidential::Value::Explicit(v), confidential::Asset::Explicit(a)) => TxOutSecrets::new(
+            a,
+            confidential::AssetBlindingFactor::zero(),
+            v,
+            confidential::ValueBlindingFactor::zero(),
+        ),
+        _ => {
+            let blinding = flags
+                .get("blinding")
+                .expect("--blinding <hex> for a confidential input");
+            utxo.unblind(&secp_ctx, secp::SecretKey::from_str(blinding).unwrap())
+                .expect("unblind")
+        }
+    };
+    let confidential = utxo.value.is_confidential();
+    let change = secrets
+        .value
+        .checked_sub(sats + fee)
+        .expect("the input does not cover the amount and the fee");
+    eprintln!(
+        "input: {} sats of {}{}",
+        secrets.value,
+        secrets.asset,
+        if confidential { " (confidential)" } else { "" }
+    );
+    let mut outputs = vec![explicit_txout(secrets.asset, sats, dest.script_pubkey())];
+    if confidential || change > 0 {
+        // a confidential input needs a confidential output for the blinders to balance: the change
+        let change_addr = Address::parse_with_params(flags.get("change").expect("--change <address>"), network)
+            .expect("change address");
+        if confidential {
+            let blinder = change_addr
+                .blinding_pubkey
+                .expect("the change address must be confidential");
+            let (txout, _, _, _) = TxOut::new_last_confidential(
+                &mut secp::rand::thread_rng(),
+                &secp_ctx,
+                change,
+                secrets.asset,
+                change_addr.script_pubkey(),
+                blinder,
+                &[secrets],
+                &[],
+            )
+            .expect("blind the change");
+            outputs.push(txout);
+        } else {
+            outputs.push(explicit_txout(secrets.asset, change, change_addr.script_pubkey()));
+        }
+    }
+    outputs.push(TxOut::new_fee(fee, secrets.asset));
+    let mut tx = tx_spending(
+        OutPoint {
+            txid: funding.txid(),
+            vout,
+        },
+        outputs,
+    );
+    let script_code = Script::new_p2pkh(&pk.pubkey_hash());
+    let sighash = SighashCache::new(&tx).segwitv0_sighash(0, &script_code, utxo.value, EcdsaSighashType::All);
+    let sig = secp_ctx.sign_ecdsa(
+        &secp::Message::from_digest(sighash.to_byte_array()),
+        &keypair.secret_key(),
+    );
+    let mut sig_bytes = sig.serialize_der().to_vec();
+    sig_bytes.push(EcdsaSighashType::All as u8);
+    tx.input[0].witness.script_witness = Witness::from_slice(&[sig_bytes, pk.to_bytes()]);
+    eprintln!(
+        "to {}: {} sats, change {} sats, fee {} sats, tx weight {} WU",
+        pos[4],
+        sats,
+        change,
+        fee,
+        tx.weight()
+    );
+    println!("{}", serialize_hex(&tx));
+}
+
+fn keyspend(pos: &[String], flags: &Flags, internal_key: &str) {
+    let cmr = program_cmr(&pos[1]);
+    let network = params(&pos[2]);
+    let secp_ctx = secp::Secp256k1::new();
+    let keypair = keypair(flags);
+    let (xonly, _) = keypair.x_only_public_key();
+    let mut spend = spend_tx(&cmr, internal_key, network, &pos[3..]);
+    let genesis_hash = genesis(&pos[2], flags.get("genesis"));
+    let tweak = spend.info.tap_tweak().to_scalar();
+    let tweaked = keypair.add_xonly_tweak(&secp_ctx, &tweak).expect("tweak");
+    assert_eq!(
+        tweaked.x_only_public_key().0,
+        spend.info.output_key().into_inner(),
+        "output key"
+    );
+    let sighash = SighashCache::new(&spend.tx)
+        .taproot_key_spend_signature_hash(
+            0,
+            &Prevouts::All(&[spend.utxo.clone()]),
+            SchnorrSighashType::Default,
+            genesis_hash,
+        )
+        .expect("sighash");
+    let sig = secp_ctx.sign_schnorr_no_aux_rand(&secp::Message::from_digest(sighash.to_byte_array()), &tweaked);
+    spend.tx.input[0].witness.script_witness = Witness::from_slice(&[sig.as_ref().to_vec()]);
+    eprintln!(
+        "key path: internal key {}, output key {}, tx weight {} WU",
+        xonly,
+        spend.info.output_key().into_inner(),
+        spend.tx.weight()
+    );
+    println!("{}", serialize_hex(&spend.tx));
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (pos, flags) = parse_args(&args);
-    let cmd = pos.first().map(String::as_str).unwrap_or("");
-    let internal_key = match (flags.get("internal-key"), flags.get("secret")) {
-        (Some(k), _) => k.clone(),
-        (None, Some(sk)) => secp::Keypair::from_seckey_str(&secp::Secp256k1::new(), sk).expect("secret key").x_only_public_key().0.to_string(),
-        (None, None) => NUMS_KEY.to_string(),
-    };
-    let internal_key = internal_key.as_str();
-    match cmd {
-        "compile" => {
-            let (node, names) = parse_commit(&pos[1]);
-            let p = node.to_vec_without_witness();
-            std::fs::write(format!("{}.uprog", pos[2]), &p).unwrap();
-            std::fs::write(format!("{}.wnames", pos[2]), serde_json::to_string(&names).unwrap()).unwrap();
-            println!("{{\"cmr\":\"{}\",\"unpruned_bytes\":{},\"witness_nodes\":{}}}", hex(&node.cmr().to_byte_array()), p.len(), names.len());
-        }
-        "address" => {
-            let cmr = program_cmr(&pos[1]);
-            let network = params(&pos[2]);
-            let (info, script, key) = spend_info(&cmr, internal_key);
-            let secp_ctx = secp::Secp256k1::verification_only();
-            let address = Address::p2tr(&secp_ctx, key, info.merkle_root(), None, network);
-            let control = info.control_block(&(script, simplicity::leaf_version())).unwrap().serialize();
-            println!("{{\"cmr\":\"{}\",\"internal_key\":\"{}\",\"output_key\":\"{}\",\"address\":\"{}\",\"script_pubkey\":\"{}\",\"control_block\":\"{}\"}}",
-                     hex(&cmr), key, info.output_key().into_inner(), address, hex(address.script_pubkey().as_bytes()), hex(&control));
-        }
+    let key = internal_key(&flags);
+    match pos.first().map(String::as_str).unwrap_or("") {
+        "compile" => compile(&pos),
+        "address" => address(&pos, &key),
         "sighash" if pos.get(1).map(String::as_str) == Some("dummy") => {
             println!("{}", hex(env::dummy().c_tx_env().sighash_all().as_ref()));
         }
-        "sighash" => {
-            let cmr = program_cmr(&pos[1]);
-            let network = params(&pos[2]);
-            let spend = spend_tx(&cmr, internal_key, network, &pos[3..]);
-            let env = environment(&spend, &cmr, genesis(&pos[2], flags.get("genesis")));
-            println!("{}", hex(env.c_tx_env().sighash_all().as_ref()));
-        }
-        "spend" => {
-            let network = params(&pos[3]);
-            let t0 = std::time::Instant::now();
-            let (p, w, cmr, cost) = if pos[1].ends_with(".prog") {
-                // the pruned encodings saved by an earlier spend: decoded for the CMR and the cost, not executed
-                let p = std::fs::read(&pos[1]).unwrap();
-                let w = std::fs::read(&pos[2]).unwrap();
-                let decoded = RedeemNode::decode::<_, _, Elements>(BitIter::from(p.iter().cloned()), BitIter::from(w.iter().cloned())).expect("decode");
-                let cost = decoded.bounds().cost.to_string().parse::<u64>().unwrap();
-                (p, w, decoded.cmr().to_byte_array(), cost)
-            } else {
-                let unpruned = program_with_witness(&pos[1], &pos[2]);
-                let cmr = unpruned.cmr().to_byte_array();
-                eprintln!("program loaded in {:.1}s", t0.elapsed().as_secs_f64());
-                let spend = spend_tx(&cmr, internal_key, network, &pos[4..]);
-                let env = environment(&spend, &cmr, genesis(&pos[3], flags.get("genesis")));
-                let program = unpruned.prune(&env).expect("the program fails on this witness and transaction");
-                let mut mac = BitMachine::for_program(&program).expect("machine");
-                mac.exec(&program, &env).expect("the pruned program fails");
-                let (p, w) = program.to_vec_with_witness();
-                let cost = program.bounds().cost.to_string().parse::<u64>().unwrap();
-                eprintln!("pruned and executed in {:.1}s", t0.elapsed().as_secs_f64());
-                if let Some(out) = flags.get("save") {
-                    std::fs::write(format!("{}.prog", out), &p).unwrap();
-                    std::fs::write(format!("{}.wit", out), &w).unwrap();
-                }
-                (p, w, cmr, cost)
-            };
-            let mut spend = spend_tx(&cmr, internal_key, network, &pos[4..]);
-            let control = spend.info.control_block(&(spend.script.clone(), simplicity::leaf_version())).unwrap().serialize();
-            spend.tx.input[0].witness.script_witness = Witness::from_slice(&[w.clone(), p.clone(), cmr.to_vec(), control.clone()]);
-            let stack_bytes = p.len() + w.len() + 32 + control.len() + 4 + 1; // items with CompactSize prefixes
-            let budget = (stack_bytes + 50) * 1000;
-            eprintln!("cost {} mWU, program {} bytes, witness {} bytes, witness stack {} bytes (budget {} mWU, covered: {}), tx weight {} WU",
-                      cost, p.len(), w.len(), stack_bytes, budget, cost <= budget as u64, spend.tx.weight());
-            println!("{}", serialize_hex(&spend.tx));
-        }
-        "wallet" => {
-            let network = params(&pos[1]);
-            let secp_ctx = secp::Secp256k1::new();
-            let keypair = secp::Keypair::from_seckey_str(&secp_ctx, flags.get("secret").expect("--secret <hex>")).expect("secret key");
-            let pk = bitcoin::PublicKey::new(keypair.public_key());
-            let blinder = flags.get("blinding").map(|bk| secp::PublicKey::from_secret_key(&secp_ctx, &secp::SecretKey::from_str(bk).expect("blinding key")));
-            println!("{{\"pubkey\":\"{}\",\"address\":\"{}\",\"confidential_address\":\"{}\"}}", pk, Address::p2wpkh(&pk, None, network),
-                     blinder.map(|b| Address::p2wpkh(&pk, Some(b), network).to_string()).unwrap_or_default());
-        }
-        "send" => {
-            let network = params(&pos[1]);
-            let secp_ctx = secp::Secp256k1::new();
-            let keypair = secp::Keypair::from_seckey_str(&secp_ctx, flags.get("secret").expect("--secret <hex>")).expect("secret key");
-            let pk = bitcoin::PublicKey::new(keypair.public_key());
-            let funding: Transaction = simplicity::elements::encode::deserialize(&hex_to_bytes(std::fs::read_to_string(&pos[2]).unwrap().trim())).expect("funding transaction hex");
-            let vout: u32 = pos[3].parse().expect("vout");
-            let utxo = funding.output[vout as usize].clone();
-            assert_eq!(utxo.script_pubkey, Address::p2wpkh(&pk, None, network).script_pubkey(), "the output does not pay the key");
-            let dest = Address::parse_with_params(&pos[4], network).expect("destination address");
-            let sats: u64 = pos[5].parse().expect("amount in satoshis");
-            let fee: u64 = pos[6].parse().expect("fee in satoshis");
-            // the input: explicit, or unblinded with the blinding key
-            let secrets = match (utxo.value, utxo.asset) {
-                (confidential::Value::Explicit(v), confidential::Asset::Explicit(a)) => simplicity::elements::TxOutSecrets::new(a, confidential::AssetBlindingFactor::zero(), v, confidential::ValueBlindingFactor::zero()),
-                _ => utxo.unblind(&secp_ctx, secp::SecretKey::from_str(flags.get("blinding").expect("--blinding <hex> for a confidential input")).unwrap()).expect("unblind"),
-            };
-            let confidential = utxo.value.is_confidential();
-            let change = secrets.value.checked_sub(sats + fee).expect("the input does not cover the amount and the fee");
-            eprintln!("input: {} sats of {}{}", secrets.value, secrets.asset, if confidential { " (confidential)" } else { "" });
-            let mut outputs = vec![TxOut {
-                asset: confidential::Asset::Explicit(secrets.asset),
-                value: confidential::Value::Explicit(sats),
-                nonce: confidential::Nonce::Null,
-                script_pubkey: dest.script_pubkey(),
-                witness: TxOutWitness::default(),
-            }];
-            if confidential || change > 0 {
-                // a confidential input needs a confidential output for the blinders to balance: the change
-                let change_addr = Address::parse_with_params(flags.get("change").expect("--change <address>"), network).expect("change address");
-                if confidential {
-                    let blinder = change_addr.blinding_pubkey.expect("the change address must be confidential");
-                    let (txout, _, _, _) = TxOut::new_last_confidential(&mut secp::rand::thread_rng(), &secp_ctx, change, secrets.asset, change_addr.script_pubkey(), blinder, &[secrets], &[]).expect("blind the change");
-                    outputs.push(txout);
-                } else {
-                    outputs.push(TxOut { asset: confidential::Asset::Explicit(secrets.asset), value: confidential::Value::Explicit(change), nonce: confidential::Nonce::Null, script_pubkey: change_addr.script_pubkey(), witness: TxOutWitness::default() });
-                }
-            }
-            outputs.push(TxOut::new_fee(fee, secrets.asset));
-            let mut tx = Transaction {
-                version: 2,
-                lock_time: LockTime::ZERO,
-                input: vec![TxIn {
-                    previous_output: OutPoint { txid: funding.txid(), vout },
-                    is_pegin: false,
-                    script_sig: Script::new(),
-                    sequence: Sequence::MAX,
-                    asset_issuance: Default::default(),
-                    witness: TxInWitness::default(),
-                }],
-                output: outputs,
-            };
-            let script_code = Script::new_p2pkh(&pk.pubkey_hash());
-            let sighash = SighashCache::new(&tx).segwitv0_sighash(0, &script_code, utxo.value, EcdsaSighashType::All);
-            let sig = secp_ctx.sign_ecdsa(&secp::Message::from_digest(sighash.to_byte_array()), &keypair.secret_key());
-            let mut sig_bytes = sig.serialize_der().to_vec();
-            sig_bytes.push(EcdsaSighashType::All as u8);
-            tx.input[0].witness.script_witness = Witness::from_slice(&[sig_bytes, pk.to_bytes()]);
-            eprintln!("to {}: {} sats, change {} sats, fee {} sats, tx weight {} WU", pos[4], sats, change, fee, tx.weight());
-            println!("{}", serialize_hex(&tx));
-        }
-        "keyspend" => {
-            let cmr = program_cmr(&pos[1]);
-            let network = params(&pos[2]);
-            let secp_ctx = secp::Secp256k1::new();
-            let keypair = secp::Keypair::from_seckey_str(&secp_ctx, flags.get("secret").expect("--secret <hex>")).expect("secret key");
-            let (xonly, _) = keypair.x_only_public_key();
-            let mut spend = spend_tx(&cmr, internal_key, network, &pos[3..]);
-            let genesis_hash = genesis(&pos[2], flags.get("genesis"));
-            let tweak = spend.info.tap_tweak().to_scalar();
-            let tweaked = keypair.add_xonly_tweak(&secp_ctx, &tweak).expect("tweak");
-            assert_eq!(tweaked.x_only_public_key().0, spend.info.output_key().into_inner(), "output key");
-            let sighash = SighashCache::new(&spend.tx)
-                .taproot_key_spend_signature_hash(0, &Prevouts::All(&[spend.utxo.clone()]), SchnorrSighashType::Default, genesis_hash)
-                .expect("sighash");
-            let sig = secp_ctx.sign_schnorr_no_aux_rand(&secp::Message::from_digest(sighash.to_byte_array()), &tweaked);
-            spend.tx.input[0].witness.script_witness = Witness::from_slice(&[sig.as_ref().to_vec()]);
-            eprintln!("key path: internal key {}, output key {}, tx weight {} WU", xonly, spend.info.output_key().into_inner(), spend.tx.weight());
-            println!("{}", serialize_hex(&spend.tx));
-        }
+        "sighash" => sighash(&pos, &flags, &key),
+        "spend" => spend(&pos, &flags, &key),
+        "keyspend" => keyspend(&pos, &flags, &key),
+        "wallet" => wallet(&pos, &flags),
+        "send" => send(&pos, &flags),
         _ => {
-            eprintln!("usage: deploy compile <program.simpl> <out>\n       deploy address <program> <network> [--internal-key <hex> | --secret <hex>]\n       deploy sighash <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>]\n       deploy spend <program> <witness.json> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>] [--save <out>]\n       deploy keyspend <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> --secret <hex> [--genesis <hash>]\n       deploy wallet <network> --secret <hex> [--blinding <hex>]\n       deploy send <network> <funding.hex> <vout> <dest> <sats> <fee> --secret <hex> [--blinding <hex>] [--change <address>]\n       deploy sighash dummy");
+            eprintln!("{}", USAGE);
             std::process::exit(2);
         }
     }

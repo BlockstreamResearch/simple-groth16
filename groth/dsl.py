@@ -7,21 +7,29 @@ environment, as in the Simplicity papers: 'OIH' = take (drop iden).
 
 Tuples are packed as balanced trees of pairs; long sums are added level by level.
 """
+
+from __future__ import annotations
+
 import re
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, TypeVar
+
+T = TypeVar('T')
+WSpec = dict[str, Any]  # a witness value spec of tools/harness: {'w': hex} or {'p': [spec, spec]}
 
 
 class CheckFailed(AssertionError):
     """A static bound or a numeric-model check failed."""
 
 
-def ensure(cond, msg='check failed'):
+def ensure(cond: object, msg: str = 'check failed') -> None:
     """Like `assert`, but also active under `python -O`: the static bounds are what make the generated
     program sound, so they must never be skipped."""
     if not cond:
         raise CheckFailed(msg)
 
 
-def balanced(items, pair_fn):
+def balanced(items: Sequence[T], pair_fn: Callable[[T, T], T]) -> T:
     """Balanced binary tree of items; the left half gets ceil(n/2) items."""
     if len(items) == 1:
         return items[0]
@@ -29,7 +37,7 @@ def balanced(items, pair_fn):
     return pair_fn(balanced(items[:h], pair_fn), balanced(items[h:], pair_fn))
 
 
-def balanced_paths(n, prefix=''):
+def balanced_paths(n: int, prefix: str = '') -> list[str]:
     """Paths (O/I letters + H) of the n leaves of a balanced tree, in order."""
     if n == 1:
         return [prefix + 'H']
@@ -37,7 +45,7 @@ def balanced_paths(n, prefix=''):
     return balanced_paths(h, prefix + 'O') + balanced_paths(n - h, prefix + 'I')
 
 
-def pairwise_sum(items, add):
+def pairwise_sum(items: Iterable[T], add: Callable[[T, T], T]) -> T:
     """Sum level by level: neighbours are added, an odd last item is carried up."""
     items = list(items)
     while len(items) > 1:
@@ -48,12 +56,12 @@ def pairwise_sum(items, add):
     return items[0]
 
 
-def Tbalanced(types):
+def Tbalanced(types: Iterable[str]) -> str:
     """Type of a balanced tree of the given types."""
     return balanced(list(types), lambda a, b: f'({a} * {b})')
 
 
-def Tpairs(*types):
+def Tpairs(*types: str) -> str:
     """Right-nested product type."""
     e = types[-1]
     for t in reversed(types[:-1]):
@@ -64,16 +72,16 @@ def Tpairs(*types):
 class Emitter:
     """The definitions of a program, in dependency order."""
 
-    def __init__(self):
-        self.defs = [] # (name, expression, type or None)
-        self.names = {} # sharing key -> name
+    def __init__(self) -> None:
+        self.defs: list[tuple[str, str, str | None]] = []  # (name, expression, type or None)
+        self.names: dict[str, str] = {}  # sharing key -> name
         self.counter = 0
 
-    def define(self, name, expr, ty=None):
+    def define(self, name: str, expr: str, ty: str | None = None) -> str:
         self.defs.append((name, expr, ty))
         return name
 
-    def share(self, key, expr, prefix='n'):
+    def share(self, key: str, expr: str, prefix: str = 'n') -> str:
         """Name of `expr`, defined on first use.  Equal keys share one DAG node."""
         if key in self.names:
             return self.names[key]
@@ -83,12 +91,13 @@ class Emitter:
         self.defs.append((name, expr, None))
         return name
 
-    def text(self):
+    def text(self) -> str:
         """The definitions, with the constants last and atoms without parentheses.  The parser of
         rust-simplicity 0.9 finds the line and column of each token by scanning the text from its start,
         so it takes time (tokens) x (text before them); the long constant literals at the end and fewer
         tokens make it several times faster.  Definitions may refer to later ones."""
-        out, consts = [], []
+        out: list[str] = []
+        consts: list[str] = []
         for name, expr, ty in self.defs:
             expr = _ATOM.sub(r'\1', expr)
             line = f'{name} := {expr} : {ty}' if ty else f'{name} := {expr}'
@@ -97,23 +106,19 @@ class Emitter:
 
 
 _ATOM = re.compile(r'\((iden|unit|[nk]\d+|jet_\w+|[A-Z][A-Z_0-9]*)\)')
-_CONST = re.compile(r'k\d+$') # Sym.const's names
+_CONST = re.compile(r'k\d+$')  # Sym.const's names
 
 
 # Witness values in the JSON format of tools/harness (see src/witness.rs).
-def wv(bits, v):
+def wv(bits: int, v: int) -> WSpec:
     return {'w': f'{v:0{bits // 4}x}'}
 
 
-def wbit(b):
-    return {'bit': b}
-
-
-def wpair(a, b):
+def wpair(a: WSpec, b: WSpec) -> WSpec:
     return {'p': [a, b]}
 
 
-def wpairs(*xs):
+def wpairs(*xs: WSpec) -> WSpec:
     """Right-nested pair."""
     e = xs[-1]
     for x in reversed(xs[:-1]):
@@ -121,5 +126,5 @@ def wpairs(*xs):
     return e
 
 
-def wbalanced(xs):
+def wbalanced(xs: Iterable[WSpec]) -> WSpec:
     return balanced(list(xs), wpair)

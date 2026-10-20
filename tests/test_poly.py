@@ -6,9 +6,14 @@ this field.)
 
     python3 tests/test_poly.py
 """
-import os, random, sys
+
+import os
+import random
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B, poly
+from groth import bn254 as B
+from groth import poly
 
 P = B.P
 
@@ -34,7 +39,9 @@ def main():
         # the line c0 + c3 w + c4 v w is yP + c3(w) xP w + c4(w) w^3
         yp, xp = rng.randrange(P), rng.randrange(P)
         tower = B.Fp12.one().mul_by_034(B.Fp2(yp), x * xp, y)
-        direct = poly.add(poly.add(poly.const(yp), poly.scale(poly.mul(poly.phi(x), poly.X), xp)), poly.mul(poly.phi(y), [0, 0, 0, 1]))
+        direct = poly.add(
+            poly.add(poly.const(yp), poly.scale(poly.mul(poly.phi(x), poly.X), xp)), poly.mul(poly.phi(y), [0, 0, 0, 1])
+        )
         assert poly.reduce(direct) == poly.from_tower(tower)
         # Frobenius maps
         for n in (1, 2, 3):

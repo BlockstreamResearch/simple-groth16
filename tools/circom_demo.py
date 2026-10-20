@@ -10,7 +10,17 @@ Needs circom (CIRCOM, default `circom`) and `npm install` in circuits/ (snarkjs 
 NODE_MODULES to use another directory).  `setup` downloads a powers-of-tau file sized for the circuit
 from the perpetual powers of tau (PTAU to use a local file).  tools/regtest.sh runs both on a node.
 """
-import argparse, json, math, os, re, shutil, subprocess, sys, time
+
+import argparse
+import json
+import math
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from groth import bn254, merkle
@@ -20,7 +30,7 @@ NODE_MODULES = os.environ.get('NODE_MODULES', os.path.join(ROOT, 'circuits', 'no
 SNARKJS = os.path.join(NODE_MODULES, '.bin', 'snarkjs')
 CIRCUIT = os.path.join(ROOT, 'circuits', 'multiplier.circom')
 NAME = 'multiplier'
-VALUES = 1 # the circuit's public values behind the root: c
+VALUES = 1  # the circuit's public values behind the root: c
 PTAU_URL = 'https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_{power}.ptau'
 
 
@@ -51,7 +61,9 @@ def check_tools():
     if not shutil.which(CIRCOM):
         sys.exit('circom not found: install circom 2 (https://github.com/iden3/circom/releases) or set CIRCOM')
     if not os.path.isdir(os.path.join(NODE_MODULES, 'circomlib')) or not os.path.exists(SNARKJS):
-        sys.exit(f'snarkjs and circomlib not found in {NODE_MODULES}: run `npm install` in circuits/ (or set NODE_MODULES)')
+        sys.exit(
+            f'snarkjs and circomlib not found in {NODE_MODULES}: run `npm install` in circuits/ (or set NODE_MODULES)'
+        )
 
 
 def setup(a):
@@ -63,34 +75,79 @@ def setup(a):
     snarkjs('groth16', 'setup', r1cs, ptau(out, r1cs), zkey0)
     snarkjs('zkey', 'contribute', zkey0, zkey, '--name=demo', '-e=simple-groth demo entropy')
     snarkjs('zkey', 'export', 'verificationkey', zkey, os.path.join(out, 'verification_key.json'))
-    run([sys.executable, os.path.join(ROOT, 'tools', 'groth16_snarkjs.py'), 'program', os.path.join(out, 'verification_key.json'),
-         '--values', str(VALUES), '--out', os.path.join(out, 'verifier')])
+    run(
+        [
+            sys.executable,
+            os.path.join(ROOT, 'tools', 'groth16_snarkjs.py'),
+            'program',
+            os.path.join(out, 'verification_key.json'),
+            '--values',
+            str(VALUES),
+            '--out',
+            os.path.join(out, 'verifier'),
+        ]
+    )
 
 
 def prove(a):
     check_tools()
     out = a.out
-    a.a, a.b = a.a % bn254.R, a.b % bn254.R # the circuit's field is the BN254 scalar field
+    a.a, a.b = a.a % bn254.R, a.b % bn254.R  # the circuit's field is the BN254 scalar field
     c = a.a * a.b % bn254.R
     sighash = bytes.fromhex(a.sighash)
     with open(os.path.join(out, 'input.json'), 'w') as f:
-        json.dump(dict(a=str(a.a), b=str(a.b), c=str(c), sighash=[str(v) for v in merkle.sighash_limbs(sighash)]), f)
+        json.dump(
+            {'a': str(a.a), 'b': str(a.b), 'c': str(c), 'sighash': [str(v) for v in merkle.sighash_limbs(sighash)]}, f
+        )
     print(f'a = {a.a}\nb = {a.b}\nc = a b mod r = {c}')
     with open(os.path.join(out, 'leaves.json'), 'w') as f:
-        json.dump(dict(sighash=a.sighash, values=[str(c)]), f)
+        json.dump({'sighash': a.sighash, 'values': [str(c)]}, f)
     t0 = time.time()
-    run(['node', os.path.join(out, f'{NAME}_js', 'generate_witness.js'), os.path.join(out, f'{NAME}_js', f'{NAME}.wasm'),
-         os.path.join(out, 'input.json'), os.path.join(out, f'{NAME}.wtns')])
-    snarkjs('groth16', 'prove', os.path.join(out, f'{NAME}.zkey'), os.path.join(out, f'{NAME}.wtns'),
-            os.path.join(out, 'proof.json'), os.path.join(out, 'public.json'))
+    run(
+        [
+            'node',
+            os.path.join(out, f'{NAME}_js', 'generate_witness.js'),
+            os.path.join(out, f'{NAME}_js', f'{NAME}.wasm'),
+            os.path.join(out, 'input.json'),
+            os.path.join(out, f'{NAME}.wtns'),
+        ]
+    )
+    snarkjs(
+        'groth16',
+        'prove',
+        os.path.join(out, f'{NAME}.zkey'),
+        os.path.join(out, f'{NAME}.wtns'),
+        os.path.join(out, 'proof.json'),
+        os.path.join(out, 'public.json'),
+    )
     print(f'proved in {time.time() - t0:.0f}s', flush=True)
-    snarkjs('groth16', 'verify', os.path.join(out, 'verification_key.json'), os.path.join(out, 'public.json'), os.path.join(out, 'proof.json'))
-    public = json.load(open(os.path.join(out, 'public.json')))
-    assert int(public[0]) == merkle.public_signal(merkle.root([sighash, c])), 'the circuit and merkle.py disagree on the root'
+    snarkjs(
+        'groth16',
+        'verify',
+        os.path.join(out, 'verification_key.json'),
+        os.path.join(out, 'public.json'),
+        os.path.join(out, 'proof.json'),
+    )
+    with open(os.path.join(out, 'public.json')) as f:
+        public = json.load(f)
+    assert int(public[0]) == merkle.public_signal(merkle.root([sighash, c])), (
+        'the circuit and merkle.py disagree on the root'
+    )
     print(f'the public signal is the Merkle root of the sighash and c = {c}, as merkle.py computes it')
-    run([sys.executable, os.path.join(ROOT, 'tools', 'groth16_snarkjs.py'), 'witness', os.path.join(out, 'verification_key.json'),
-         os.path.join(out, 'proof.json'), os.path.join(out, 'public.json'), '--leaves', os.path.join(out, 'leaves.json'),
-         '--out', os.path.join(out, 'verifier')])
+    run(
+        [
+            sys.executable,
+            os.path.join(ROOT, 'tools', 'groth16_snarkjs.py'),
+            'witness',
+            os.path.join(out, 'verification_key.json'),
+            os.path.join(out, 'proof.json'),
+            os.path.join(out, 'public.json'),
+            '--leaves',
+            os.path.join(out, 'leaves.json'),
+            '--out',
+            os.path.join(out, 'verifier'),
+        ]
+    )
 
 
 def main():

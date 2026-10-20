@@ -4,10 +4,16 @@ residue witness, Groth16 verification, and points of the twist outside G2.
 
     python3 tests/test_bn254_ref.py
 """
-import os, random, sys
+
+import os
+import random
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B, poly
 from py_ecc import bn128 as E
+
+from groth import bn254 as B
+from groth import poly
 
 rng = random.Random(1)
 
@@ -42,7 +48,7 @@ def test_tower():
         assert (F * F.inv()).is_one()
         assert F * G == G * F
         for n in (1, 2, 3):
-            assert F.frobenius(n) == F ** (B.P ** n), n
+            assert F.frobenius(n) == F ** (B.P**n), n
         c0, c3, c4 = a, b, a * b
         sparse = B.Fp12(B.Fp6(c0), B.Fp6(c3, c4))
         assert F.mul_by_034(c0, c3, c4) == F * sparse
@@ -65,7 +71,7 @@ def test_groups():
     Q = B.g2_random_point(rng)
     assert B.g2_on_curve(*Q) and not B.g2_in_subgroup(Q)
     assert B.g2_mul_unreduced(Q, B.R * h) is None
-    T = B.g2_mul_unreduced(Q, B.R * h // 10069) # a point of order 10069
+    T = B.g2_mul_unreduced(Q, B.R * h // 10069)  # a point of order 10069
     assert T is not None and B.g2_mul_unreduced(T, 10069) is None and not B.g2_in_subgroup(T)
     print('groups ok')
 
@@ -85,7 +91,9 @@ def test_pairing():
         # the affine Miller loop gives the same pairing (its Miller value differs by an F_p2* factor)
         hints = []
         fa = B.multi_miller_loop_affine([(Pa, Qb), (B.G1_GEN, B.G2_GEN)], hints)
-        assert B.final_exponentiation(fa) == B.final_exponentiation(B.multi_miller_loop([(Pa, Qb), (B.G1_GEN, B.G2_GEN)]))
+        assert B.final_exponentiation(fa) == B.final_exponentiation(
+            B.multi_miller_loop([(Pa, Qb), (B.G1_GEN, B.G2_GEN)])
+        )
         assert len(hints) == 2 and len(hints[0]) == len(B.ATE_NAF) - 1 + sum(1 for d in B.ATE_NAF[:-1] if d) + 2
     print('pairing ok')
 
@@ -103,12 +111,13 @@ def test_residue_witness():
 def test_groth16():
     vk, proof, inputs = B.groth16_instance()
     assert B.groth16_verify(vk, proof, inputs)
-    bad = list(inputs); bad[0] = (bad[0] + 1) % B.R
+    bad = list(inputs)
+    bad[0] = (bad[0] + 1) % B.R
     assert not B.groth16_verify(vk, proof, bad)
     A, Bp, C = proof
     assert not B.groth16_verify(vk, (A, Bp, B.g1_add(C, B.G1_GEN)), inputs)
     assert not B.groth16_verify(vk, proof, [inputs[0] + B.R] + inputs[1:]), 'an input >= r'
-    T = B.g2_mul_unreduced(B.g2_random_point(rng), B.R) # a point of the cofactor part
+    T = B.g2_mul_unreduced(B.g2_random_point(rng), B.R)  # a point of the cofactor part
     assert not B.groth16_verify(vk, (A, B.g2_add(Bp, T), C), inputs), 'B outside G2'
     print('groth16 ok')
 

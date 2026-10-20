@@ -8,37 +8,44 @@ polynomials a0 + a1 (w^6 - 9) (`phi`).
 Polynomials are lists of ints mod p, lowest degree first.  This module is plain Python: the prover uses it,
 and the generator uses it for constants.
 """
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 from . import bn254
 
+Poly = list[int]  # coefficients mod p, lowest degree first
+
 P = bn254.P
-M = [82] + [0] * 5 + [P - 18] + [0] * 5 + [1] # w^12 - 18 w^6 + 82
+M = [82] + [0] * 5 + [P - 18] + [0] * 5 + [1]  # w^12 - 18 w^6 + 82
 
 
-def trim(a):
+def trim(a: Sequence[int]) -> Poly:
     a = [x % P for x in a]
     while len(a) > 1 and a[-1] == 0:
         a.pop()
     return a
 
 
-def add(a, b):
+def add(a: Sequence[int], b: Sequence[int]) -> Poly:
     n = max(len(a), len(b))
     return trim([(a[i] if i < len(a) else 0) + (b[i] if i < len(b) else 0) for i in range(n)])
 
 
-def neg(a):
+def neg(a: Sequence[int]) -> Poly:
     return trim([-x for x in a])
 
 
-def sub(a, b):
+def sub(a: Sequence[int], b: Sequence[int]) -> Poly:
     return add(a, neg(b))
 
 
-def scale(a, k):
+def scale(a: Sequence[int], k: int) -> Poly:
     return trim([x * k for x in a])
 
 
-def mul(a, b):
+def mul(a: Sequence[int], b: Sequence[int]) -> Poly:
     out = [0] * (len(a) + len(b) - 1)
     for i, x in enumerate(a):
         if x:
@@ -47,7 +54,7 @@ def mul(a, b):
     return trim(out)
 
 
-def divmod_m(a):
+def divmod_m(a: Sequence[int]) -> tuple[Poly, Poly]:
     """(q, r) with a = q M + r, deg r < 12."""
     a = [x % P for x in a] + [0] * max(0, 12 - len(a))
     q = [0] * max(1, len(a) - 12)
@@ -61,31 +68,31 @@ def divmod_m(a):
     return trim(q), a[:12]
 
 
-def reduce(a):
+def reduce(a: Sequence[int]) -> Poly:
     return divmod_m(a)[1]
 
 
-def evaluate(a, z):
+def evaluate(a: Sequence[int], z: int) -> int:
     acc = 0
     for x in reversed(a):
         acc = (acc * z + x) % P
     return acc
 
 
-def const(c):
+def const(c: int) -> Poly:
     return [c % P]
 
 
 X = [0, 1]
 
 
-def phi(a):
+def phi(a: bn254.Fp2 | int) -> Poly:
     """The F_p2 element a = a0 + a1 u as the polynomial a0 + a1 (w^6 - 9)."""
     a = bn254._fp2(a)
     return trim([a.c0 - 9 * a.c1, 0, 0, 0, 0, 0, a.c1])
 
 
-def from_tower(f):
+def from_tower(f: bn254.Fp12) -> Poly:
     """A bn254.Fp12 as its 12 coefficients in w.  The tower basis element u^a v^b w^c is
     (w^6 - 9)^a w^(2b + c)."""
     out = [0] * 12
@@ -97,7 +104,7 @@ def from_tower(f):
     return [x % P for x in out]
 
 
-def to_tower(d):
+def to_tower(d: Sequence[int]) -> bn254.Fp12:
     d = list(d) + [0] * (12 - len(d))
     c2s = [bn254.Fp2(d[k] + 9 * d[k + 6], d[k + 6]) for k in range(6)]
     # index k = 2b + c
@@ -106,7 +113,7 @@ def to_tower(d):
     return bn254.Fp12(c0, c1)
 
 
-def frobenius_matrix(n):
+def frobenius_matrix(n: int) -> list[Poly]:
     """F[j] = pi^n(w^j) as a reduced polynomial (12 coefficients)."""
     out = []
     for j in range(12):

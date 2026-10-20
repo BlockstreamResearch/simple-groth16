@@ -1,0 +1,51 @@
+[project]
+name = "simple-groth16"
+version = "0.1.0"
+description = "A Groth16 verifier for Simplicity"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# the linters, and py_ecc for tests/test_bn254_ref.py
+dev = ["ruff==0.16.8", "mypy==2.3.1", "py_ecc"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["groth"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["circuits/node_modules"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "PIE", "RUF"]
+ignore = [
+    "E501",   # the formatter wraps the code; long strings and comments stay
+    "E731",   # small local functions as lambdas, as the generators write them
+    "E741",   # l is a line, as in the papers
+    "B905",   # zip without strict=: the lengths match by construction
+    "RUF005", # concatenated lists read like the formulas
+    "RUF023", # __slots__ in the order of the constructor
+]
+
+[tool.ruff.lint.per-file-ignores]
+# the scripts put the repository on sys.path before importing groth
+"examples/*" = ["E402"]
+"tools/*" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["groth"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["groth"]
+check_untyped_defs = true
+ignore_missing_imports = true

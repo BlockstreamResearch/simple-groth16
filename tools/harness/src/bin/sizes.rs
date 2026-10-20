@@ -15,8 +15,14 @@ use std::collections::{BTreeMap, HashMap};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    assert!(args.len() == 2 || args.len() == 3, "usage: sizes <program.simpl> <witness.json> [names]");
-    let names: Vec<String> = args.get(2).map(|s| s.split(',').map(String::from).collect()).unwrap_or_default();
+    assert!(
+        args.len() == 2 || args.len() == 3,
+        "usage: sizes <program.simpl> <witness.json> [names]"
+    );
+    let names: Vec<String> = args
+        .get(2)
+        .map(|s| s.split(',').map(String::from).collect())
+        .unwrap_or_default();
     let text = std::fs::read_to_string(&args[0]).unwrap();
     let forest = Forest::parse::<Elements>(&text).unwrap_or_else(|e| panic!("{}", e));
     let wit = witness::load(&args[1]);
@@ -28,7 +34,8 @@ fn main() {
         let mut defs = HashMap::new();
         let main = forest.roots().get("main").expect("no main").clone();
         for item in main.post_order_iter::<MaxSharing<_>>() {
-            defs.entry(item.node.name().to_string()).or_insert_with(|| item.node.clone());
+            defs.entry(item.node.name().to_string())
+                .or_insert_with(|| item.node.clone());
         }
         let mut owner = HashMap::new();
         for (i, nm) in names.iter().enumerate() {
@@ -49,12 +56,26 @@ fn main() {
                 _ => {}
             }
             let k = match item.node.inner() {
-                Inner::Iden => "iden", Inner::Unit => "unit", Inner::InjL(_) | Inner::InjR(_) => "inj",
-                Inner::Take(_) => "take", Inner::Drop(_) => "drop", Inner::Comp(..) => "comp",
-                Inner::Case(..) => "case", Inner::AssertL(..) | Inner::AssertR(..) => { hidden += 1; "assert" }
-                Inner::Pair(..) => "pair", Inner::Disconnect(..) => "disconnect", Inner::Witness(_) => "witness",
-                Inner::Fail(_) => "fail", Inner::Jet(_) => "jet",
-                Inner::Word(w) => { word_bits += w.len(); "word" }
+                Inner::Iden => "iden",
+                Inner::Unit => "unit",
+                Inner::InjL(_) | Inner::InjR(_) => "inj",
+                Inner::Take(_) => "take",
+                Inner::Drop(_) => "drop",
+                Inner::Comp(..) => "comp",
+                Inner::Case(..) => "case",
+                Inner::AssertL(..) | Inner::AssertR(..) => {
+                    hidden += 1;
+                    "assert"
+                }
+                Inner::Pair(..) => "pair",
+                Inner::Disconnect(..) => "disconnect",
+                Inner::Witness(_) => "witness",
+                Inner::Fail(_) => "fail",
+                Inner::Jet(_) => "jet",
+                Inner::Word(w) => {
+                    word_bits += w.len();
+                    "word"
+                }
             };
             *kinds.entry(k).or_insert(0) += 1;
         }
@@ -63,15 +84,25 @@ fn main() {
         for (k, n) in &kinds {
             println!("  {:10} {:7}", k, n);
         }
-        println!("constants {} bytes, pruned-branch CMRs {} bytes, the rest {} bytes ({:.1} bits per node)",
-                 word_bits / 8, hidden * 32, p.len() - word_bits / 8 - hidden * 32,
-                 (p.len() * 8 - word_bits - hidden * 256) as f64 / nodes as f64);
+        println!(
+            "constants {} bytes, pruned-branch CMRs {} bytes, the rest {} bytes ({:.1} bits per node)",
+            word_bits / 8,
+            hidden * 32,
+            p.len() - word_bits / 8 - hidden * 32,
+            (p.len() * 8 - word_bits - hidden * 256) as f64 / nodes as f64
+        );
         if !names.is_empty() {
             let per_node = (p.len() * 8 - word_bits - hidden * 256) as f64 / nodes as f64;
             for (i, (n, wb, h)) in parts.iter().enumerate() {
                 let nm = names.get(i).map(|s| s.as_str()).unwrap_or("rest");
-                println!("  {:12} {:6} nodes {:7} constant bytes {:5} CMR bytes  ~{:6.0} bytes",
-                         nm, n, wb / 8, h * 32, (*n as f64 * per_node + (*wb + h * 256) as f64) / 8.0);
+                println!(
+                    "  {:12} {:6} nodes {:7} constant bytes {:5} CMR bytes  ~{:6.0} bytes",
+                    nm,
+                    n,
+                    wb / 8,
+                    h * 32,
+                    (*n as f64 * per_node + (*wb + h * 256) as f64) / 8.0
+                );
             }
         }
     });

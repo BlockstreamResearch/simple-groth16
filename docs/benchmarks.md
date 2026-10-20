@@ -87,7 +87,7 @@ Measured on a 2-core cloud VM.
 
 ## Reproducing
 
-Each number comes from a test, which prints it:
+Each number comes from a test, which prints it (`make bench` for the first, `make -j4 test` for the rest):
 
 ```sh
 python3 tests/test_fp.py bench   # F_p operations
@@ -95,11 +95,12 @@ python3 tests/test_poly.py       # F_p12 as polynomials, against the tower
 python3 tests/test_curve.py      # on-curve checks, tables, the range check of an input
 python3 tests/test_pairing.py    # the check alone: its parts, its steps, tampered witnesses
 python3 tests/test_g2_check.py   # the G2 membership check
-python3 tests/test_groth16.py    # the whole verifier
+python3 tests/test_groth16.py    # the whole verifier (INPUTS=2 for two public inputs)
+python3 tests/test_inputs.py     # keys with 3 to 5 public inputs (generated, not run)
 python3 tests/test_binding.py    # the verifier with the transaction binding
 ```
 
-`deploy spend` prints the cost, the sizes and the budget of a real transaction, and `tools/harness/target/release/costs <program.simpl>` the cost of every named definition of a program. The files in `examples/multiplier/` regenerate the program and the witness of the regtest spend `407cf881…` byte for byte:
+`deploy spend` prints the cost, the sizes and the budget of a real transaction, and `tools/harness/target/release/costs <program.simpl>` the cost of every named definition of a program. The files in `examples/multiplier/` regenerate the program and the witness of the regtest spend `407cf881…` byte for byte (`make example`):
 
 ```sh
 E=examples/multiplier

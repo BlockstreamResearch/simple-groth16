@@ -4,13 +4,19 @@ Off-curve points, a wrong table entry and an input >= r must be rejected.
 
     python3 tests/test_curve.py
 """
-import os, random, sys
+
+import os
+import random
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B
-from groth.curve import Curve
-from groth.sym import Sym, Num, words, flat
-from groth.dsl import wv, wbalanced, Tbalanced, balanced_paths
 import harness
+
+from groth import bn254 as B
+from groth import fp as F
+from groth.curve import Curve
+from groth.dsl import Tbalanced, balanced_paths, wbalanced, wv
+from groth.sym import Num, Sym, flat, words
 
 P = F.P
 
@@ -20,20 +26,28 @@ def run(name, words, build, expect_ok=True, verbose=True, hi=None):
     value in the numeric pass and verifies it in the symbolic pass; hi: bound declared for the inputs"""
     hi = [P - 1] * len(words) if hi is None else ([hi] * len(words) if isinstance(hi, int) else hi)
     expected = []
-    be = Num(); fp = F.Fp(be)
+    be = Num()
+    fp = F.Fp(be)
 
     def check_num(label, v):
         expected.append((label, be.check(v.e, v.hi), v.hi))
         return F.Val(0, 0)
+
     try:
         build(fp, Curve(fp), [F.Val(w, h) for w, h in zip(words, hi)], check_num)
     except AssertionError:
         if expect_ok:
             raise
     exp = {label: w for label, w, h in expected}
-    be = Sym(256 * len(words)); fp = F.Fp(be)
+    be = Sym(256 * len(words))
+    fp = F.Fp(be)
     ins = [F.Val(be.proj(p, 256), h) for p, h in zip(balanced_paths(len(words)), hi)]
-    body = build(fp, Curve(fp), ins, lambda label, v: F.Val(fp.assert_eq_word(v, exp[label]), 0) if label in exp else F.Val(be.unit(), 0))
+    body = build(
+        fp,
+        Curve(fp),
+        ins,
+        lambda label, v: F.Val(fp.assert_eq_word(v, exp[label]), 0) if label in exp else F.Val(be.unit(), 0),
+    )
     be.em.define('w_in', 'witness', f'_ -> {Tbalanced(["2^256"] * len(words))}')
     be.em.define('main', f'comp w_in ({body.t})')
     estimate = 2 * (100 + 256 * len(words)) + body.c
@@ -74,15 +88,23 @@ def run_select(name, rng, lo, w, expect_ok=True, verbose=True):
     """A table of 2^w entries of 6 random words, selected by bits lo .. lo+w-1 of a random witness word;
     the program checks the selected words against the entry the digit picks (or, to be rejected, the next
     entry).  w = 8 at an aligned position takes the byte as one projection and splits it with BITS8."""
-    table = [[[rng.randrange(1 << 256) for _ in range(4)], [rng.randrange(1 << 256) for _ in range(2)]] for _ in range(1 << w)]
+    table = [
+        [[rng.randrange(1 << 256) for _ in range(4)], [rng.randrange(1 << 256) for _ in range(2)]]
+        for _ in range(1 << w)
+    ]
     word = rng.randrange(1 << 254)
     d = (word >> lo) & ((1 << w) - 1)
     assert Curve(F.Fp(Num())).select_const(F.Val(word, F.WORD_MAX), lo, w, table) == table[d]
     want = table[d if expect_ok else (d + 1) % (1 << w)]
-    be = Sym(256); fp = F.Fp(be); cv = Curve(fp)
+    be = Sym(256)
+    fp = F.Fp(be)
+    cv = Curve(fp)
     sel = cv.select_const(F.Val(be.proj('H', 256), F.WORD_MAX), lo, w, table)
-    found = be.with_env(sel, [words(4), words(2)], lambda acc: be.checks([
-        fp.assert_eq_word(F.Val(e, 0), v) for e, v in zip(flat(acc), flat(want))]))
+    found = be.with_env(
+        sel,
+        [words(4), words(2)],
+        lambda acc: be.checks([fp.assert_eq_word(F.Val(e, 0), v) for e, v in zip(flat(acc), flat(want))]),
+    )
     # the whole word is read too, so that its type is the witness's (an unread part would be inferred as 1)
     body = be.checks([found, fp.assert_eq_word(F.Val(be.proj('H', 256), 0), word)])
     be.em.define('w_in', 'witness', '_ -> 2^256')

@@ -8,12 +8,21 @@ false instance must be rejected too.
 
     python3 tests/test_pairing.py
 """
-import os, random, sys, time
+
+import os
+import random
+import sys
+import time
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F, bn254 as B, poly, pairing as PC
-from groth.dsl import CheckFailed, Tbalanced, wv, wpair, wbalanced
-from groth.sym import Sym, Num, words
 import harness
+
+from groth import bn254 as B
+from groth import fp as F
+from groth import pairing as PC
+from groth import poly
+from groth.dsl import CheckFailed, Tbalanced, wbalanced, wpair, wv
+from groth.sym import Num, Sym, words
 
 P = F.P
 
@@ -43,12 +52,15 @@ def program(delta, const, gt, b):
     """The check alone; witness (the input words, the check's witness), or the check's witness alone
     without inputs, and the check's witness nodes."""
     n = len(gt) - 1
-    bits = 256 * n + PC.witness_bits(n)
-    be = Sym(bits); fp = F.Fp(be)
+    bits = 256 * n + PC.witness_bits()
+    be = Sym(bits)
+    fp = F.Fp(be)
     pc = PC.PairingCheck(fp, delta, const, gt, b)
-    inp, ((pts, ac), rz) = be._unpack('', [words(n), PC.witness_shape(n)]) if n else ([], be._unpack('', PC.witness_shape(0)))
+    inp, ((pts, ac), rz) = (
+        be._unpack('', [words(n), PC.witness_shape()]) if n else ([], be._unpack('', PC.witness_shape()))
+    )
     body = pc.program({'x': [F.Val(x, F.WORD_MAX) for x in inp], 'words': inp}, pts, ac, rz)
-    wt = f'({Tbalanced(["2^256"] * n)} * {PC.witness_type(n)})' if n else PC.witness_type(0)
+    wt = f'({Tbalanced(["2^256"] * n)} * {PC.witness_type()})' if n else PC.witness_type()
     be.em.define('w_in', 'witness', f'_ -> {wt}')
     be.em.define('main', f'comp w_in ({body.t})')
     return be.em.text(), 2 * (100 + bits) + body.c, pc
@@ -70,7 +82,7 @@ def tampered(prover, w, x, how):
         v['a'][k][3] += 1
     elif how == 'residue witness':
         v['ac'][2] += 1
-    elif how == 'public input': # another input, with the honest values: the program selects other factors
+    elif how == 'public input':  # another input, with the honest values: the program selects other factors
         x ^= 1 << 100
     return [x], prover.seal(v, [x], check=False)
 
@@ -78,25 +90,29 @@ def tampered(prover, w, x, how):
 def main():
     rng = random.Random(int(os.environ.get('SEED', '5')))
     delta, const, gt, pairs, x = instance(rng, random.Random(11))
-    (A, Bq), (C, _) = pairs # the check's first point is A itself here (Groth16 passes -A)
+    _, (C, _) = pairs  # the check's first point is A itself here (Groth16 passes -A)
     deg = PC.window_plan(1)[0]
     print(f'{PC.N_RELS} relations, S of degree {deg}, Q of {PC.q_words(deg)} coefficients')
     # prover and model
     t0 = time.time()
     prover = PC.Prover(delta, const, gt)
-    print(f'tables in {time.time() - t0:.1f}s: windows at steps ' + ', '.join(f'{s} ({len(ws)})' for s, ws in prover.plan.items()))
+    print(
+        f'tables in {time.time() - t0:.1f}s: windows at steps '
+        + ', '.join(f'{s} ({len(ws)})' for s, ws in prover.plan.items())
+    )
     t0 = time.time()
     w = prover.witness(pairs, [x])
     r, z = F.from_mont(w['r']), F.from_mont(w['z'])
     R = PC.NumRing(z)
     S = PC.horner(R, PC.relations(R, w['values'], prover.lines), r)
-    assert S == poly.evaluate([F.from_mont(q) for q in w['q']], z) * poly.evaluate(poly.M, z) % P
+    assert poly.evaluate([F.from_mont(q) for q in w['q']], z) * poly.evaluate(poly.M, z) % P == S
     # the degrees the generator counts (and sizes Q by) are the relations' degrees
     degs = [len(poly.trim(rel)) - 1 for rel in PC.relations(PC.PolyRing, w['values'], prover.lines)]
     assert degs == PC._degrees(PC.COMMIT, {s: len(ws) for s, ws in prover.plan.items()})
     print(f'witness in {time.time() - t0:.1f}s, S(z) = Q(z) M(z), relation degrees as counted (at most {max(degs)})')
     bad = [(how, *tampered(prover, w, x, how)) for how in ('slope', 'Miller value', 'residue witness', 'public input')]
-    wrong_r = dict(w); wrong_r['r'] ^= 1
+    wrong_r = dict(w)
+    wrong_r['r'] ^= 1
     bad.append(('challenge', [x], wrong_r))
     # numeric model
     b = PC.bounds()
@@ -120,7 +136,9 @@ def main():
     for (how, _, _), rb in zip(bad, res[1:]):
         assert not rb.get('ok') and rb.get('stage') in ('exec', 'finalize'), (how, rb)
         print(f'wrong {how:15} rejected')
-    print(f'pairing check cost {ok["cost"]:,}: setup {pc.parts["setup"]:,}, loop {pc.parts["loop"]:,}, final {pc.parts["final"]:,}')
+    print(
+        f'pairing check cost {ok["cost"]:,}: setup {pc.parts["setup"]:,}, loop {pc.parts["loop"]:,}, final {pc.parts["final"]:,}'
+    )
     print('steps: ' + ', '.join(f'{k} {v:,}' for k, v in pc.costs.items()))
     print(f'program {ok["program_bytes"]:,} B, witness {ok["witness_bytes"]:,} B ({time.time() - t0:.0f}s)')
 

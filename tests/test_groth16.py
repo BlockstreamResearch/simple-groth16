@@ -15,21 +15,22 @@ import harness
 
 def main():
     n = int(os.environ.get('INPUTS', '1'))
-    w = int(os.environ.get('W', '5'))
     vk, proof, inputs = B.groth16_instance(n, seed=int(os.environ.get('SEED', '7')))
     assert B.groth16_verify(vk, proof, inputs)
     bnd = PC.bounds()
     # prover
-    g = Groth16(F.Fp(Num()), vk, w, b=bnd)
+    g = Groth16(F.Fp(Num()), vk, b=bnd)
     t0 = time.time()
     wit = g.witness(proof, inputs)
-    print(f'witness in {time.time() - t0:.1f}s: s = {wit["s"]}, {len(wit["msm_hints"])} MSM slopes, {len(wit["leaves"])} leaves, {len(wit["q"])} words of Q')
+    print(f'witness in {time.time() - t0:.1f}s: {len(wit["leaves"])} leaves, {len(wit["q"])} words of Q')
     assert g.witness((proof[0], proof[1], B.g1_add(proof[2], B.G1_GEN)), inputs) is None, 'a wrong proof has no witness'
     # numeric model
     g.verify(g.num_input(wit))
     print('numeric model ok')
     # the program
-    text, g, estimate = Groth16.compile(vk, w, b=bnd)
+    t0 = time.time()
+    text, g, estimate = Groth16.compile(vk, b=bnd)
+    print(f'program generated in {time.time() - t0:.1f}s')
     text_kb = len(text) // 1024
     # rejections: a wrong public input (with the hints of the right one), a tampered proof (C + G1, same witness)
     bad_input = dict(wit); bad_input['scalars'] = [(inputs[0] + 1) % B.R] + inputs[1:]
@@ -45,17 +46,16 @@ def main():
     for bad, label in zip(results[1:], ('wrong input', 'tampered proof')):
         assert not bad.get('ok') and bad.get('stage') in ('exec', 'finalize'), (label, bad)
         print(f'{label:15} rejected as expected')
-    print(f'groth16 ({n} input{"s" if n > 1 else ""}, w = {w}) cost {r["cost"]:,}  estimate {estimate:,}  ok  '
+    print(f'groth16 ({n} input{"s" if n > 1 else ""}) cost {r["cost"]:,}  estimate {estimate:,}  ok  '
           f'prog {r["program_bytes"]} B  witness {r["witness_bytes"]} B  cells {r.get("cells"):,}  text {text_kb} KB  ({seconds:.0f}s for three runs)')
-    rows = [(f'MSM ({n} input{"s" if n > 1 else ""}, {g.nwin} windows of {w} bits each)', g.parts['msm']),
-            ('pairing check: setup', g.parts['setup']), ('pairing check: loop', g.parts['loop']), ('pairing check: final', g.parts['final']),
+    rows = [('pairing check: setup', g.parts['setup']), ('pairing check: loop', g.parts['loop']), ('pairing check: final', g.parts['final']),
             ('range checks', g.parts['range checks']), ('whole program', r['cost'])]
     for name, cst in rows:
         print(f'{name:48} {cst:>12,}')
     # the budget of the input (program + witness bytes + 50, times 1000) must cover the cost; pad if not
     pad = Groth16.padding(r['cost'], r['program_bytes'], r['witness_bytes'])
     if pad:
-        text, g, estimate = Groth16.compile(vk, w, pad_blocks=pad, b=bnd)
+        text, g, estimate = Groth16.compile(vk, pad_blocks=pad, b=bnd)
         r = harness.expect_ok(harness.run(f'groth16_{n}_padded', text, wv(g, wit)), 'groth16 padded')
         assert r['cost'] == estimate, (r['cost'], estimate)
     assert Groth16.budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), 'budget'

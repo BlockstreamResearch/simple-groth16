@@ -1,12 +1,13 @@
 """Small helpers: Simplicity's human-readable encoding, balanced trees, witness files, checks.
 
-A program is a list of definitions `name := expression`, the last one `main`.  An expression acts on its
+A program is a list of definitions `name := expression`, one of them `main`.  An expression acts on its
 environment (its input value): `iden` is the whole environment, `take` / `drop` its left / right half,
 `comp s t` feeds the output of s into t.  A path over {O, I} ending in H names a component of the
 environment, as in the Simplicity papers: 'OIH' = take (drop iden).
 
 Tuples are packed as balanced trees of pairs; long sums are added level by level.
 """
+import re
 
 
 class CheckFailed(AssertionError):
@@ -83,10 +84,20 @@ class Emitter:
         return name
 
     def text(self):
-        out = []
+        """The definitions, with the constants last and atoms without parentheses.  The parser of
+        rust-simplicity 0.9 finds the line and column of each token by scanning the text from its start,
+        so it takes time (tokens) x (text before them); the long constant literals at the end and fewer
+        tokens make it several times faster.  Definitions may refer to later ones."""
+        out, consts = [], []
         for name, expr, ty in self.defs:
-            out.append(f'{name} := {expr} : {ty}' if ty else f'{name} := {expr}')
-        return '\n'.join(out) + '\n'
+            expr = _ATOM.sub(r'\1', expr)
+            line = f'{name} := {expr} : {ty}' if ty else f'{name} := {expr}'
+            (consts if ty is None and _CONST.match(name) else out).append(line)
+        return '\n'.join(out + consts) + '\n'
+
+
+_ATOM = re.compile(r'\((iden|unit|[nk]\d+|jet_\w+|[A-Z][A-Z_0-9]*)\)')
+_CONST = re.compile(r'k\d+$') # Sym.const's names
 
 
 # Witness values in the JSON format of tools/harness (see src/witness.rs).

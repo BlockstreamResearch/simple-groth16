@@ -60,21 +60,30 @@ hashes at the end.
 `relations` is written once over an abstract ring: the prover runs it on polynomials to get S and Q,
 the tests run it on numbers to compare with the program.
 """
+
+from __future__ import annotations
+
 import hashlib
+from collections.abc import Sequence
+from typing import Any
+
 from . import bn254, poly
 from .curve import Curve, chain
-from .dsl import ensure, balanced, Tbalanced, wv, wpair, wbalanced
-from .fp import Fp, Val, P, WORD_MAX, to_mont, from_mont
-from .sym import E, Num, words, is_sym, flat, SHA_CTX_W
+from .dsl import Tbalanced, WSpec, balanced, ensure, wbalanced, wpair, wv
+from .fp import CRT_MAX, WORD_MAX, Fp, P, Val, from_mont, to_mont
+from .sym import SHA_CTX_W, E, Num, Shape, Term, flat, is_sym, words
 
-F_HI = 2**254 - 1 # bound of a committed word: the program checks that its top two bits are 0
-KB = 130 * P // 100 # bound of every run value (z^k, r, ...) carried through the loop
+Ring = Any  # PolyRing, NumRing or DegRing: add, sub, mul, k (a constant), even (an element of F_p6), conj_sub, X
+Window = tuple[int, int, int]  # (input, lowest bit, width)
+
+F_HI = 2**254 - 1  # bound of a committed word: the program checks that its top two bits are 0
+KB = 130 * P // 100  # bound of every run value (z^k, r, ...) carried through the loop
 THREE_HALVES = 3 * pow(2, -1, P) % P
 
 
 # ---------------------------------------------------------------------------------------------------
 # The loop: 88 steps along the NAF of 6x + 2
-def loop_steps():
+def loop_steps() -> list[str]:
     """'D' doubling, 'A+' / 'A-' addition of +-Q, then the Frobenius additions 'F1' (pi(Q)), 'F2' (-pi^2(Q))."""
     digits = bn254.ATE_NAF
     steps = []
@@ -85,18 +94,18 @@ def loop_steps():
     return steps + ['F1', 'F2']
 
 
-STEPS = loop_steps() # 65 doublings, 8 + 13 additions, 2 Frobenius additions
+STEPS = loop_steps()  # 65 doublings, 8 + 13 additions, 2 Frobenius additions
 N_STEPS = len(STEPS)
 ADDS = ('A+', 'A-', 'F1', 'F2')
 
 
-def step_points(Q):
+def step_points(Q: bn254.G2Point) -> dict[str, bn254.G2Point | None]:
     """The point added at each kind of step, for the G2 point Q."""
     Q1 = bn254.g2_frobenius(Q)
     return {'D': None, 'A+': Q, 'A-': bn254.g2_neg(Q), 'F1': Q1, 'F2': bn254.g2_neg(bn254.g2_frobenius(Q1))}
 
 
-def slopes(Q):
+def slopes(Q: bn254.G2Point) -> list[tuple[bn254.Fp2, tuple[bn254.Fp2, bn254.Fp2]]]:
     """(lambda, (c3, c4)) of every step of the G2 point Q, as in bn254.multi_miller_loop_affine."""
     pts, T, out = step_points(Q), Q, []
     for kind in STEPS:
@@ -107,7 +116,7 @@ def slopes(Q):
     return out
 
 
-def fixed_lines(Q):
+def fixed_lines(Q: bn254.G2Point) -> list[tuple[bn254.Fp2, bn254.Fp2]]:
     """The line coefficients (c3, c4) = (-lambda, lambda xT - yT) of every step of a fixed point."""
     return [coeffs for _, coeffs in slopes(Q)]
 
@@ -116,40 +125,46 @@ def fixed_lines(Q):
 # The relations, over a ring
 class PolyRing:
     """Polynomials over F_p."""
+
     X = poly.X
     add, sub, mul = staticmethod(poly.add), staticmethod(poly.sub), staticmethod(poly.mul)
     k = staticmethod(poly.const)
-    elem = staticmethod(poly.trim)
 
     @staticmethod
-    def even(a): # an element of F_p6: a polynomial in w^2, given by its 6 coefficients
+    def even(a: Sequence[int]) -> poly.Poly:  # an element of F_p6: a polynomial in w^2, given by its 6 coefficients
         return poly.trim([x for c in a for x in (c, 0)])
+
+    @staticmethod
+    def conj_sub(
+        x: poly.Poly, y: poly.Poly, sign: int
+    ) -> poly.Poly:  # x - y, where y(w) = sign x(-w) (DegRing uses the sign)
+        return poly.sub(x, y)
 
 
 class NumRing:
     """F_p, the variable set to z."""
-    def __init__(self, z):
+
+    def __init__(self, z: int) -> None:
         self.X = z % P
 
     add = staticmethod(lambda a, b: (a + b) % P)
     sub = staticmethod(lambda a, b: (a - b) % P)
     mul = staticmethod(lambda a, b: a * b % P)
     k = staticmethod(lambda c: c % P)
+    conj_sub = staticmethod(lambda x, y, sign: (x - y) % P)
 
-    def elem(self, coeffs):
-        return poly.evaluate(coeffs, self.X)
-
-    def even(self, a):
+    def even(self, a: Sequence[int]) -> int:
         return poly.evaluate(a, self.X * self.X % P)
 
 
-NEG = -10 ** 9 # the degree of 0
+NEG = -(10**9)  # the degree of 0
 
 
 class DegRing:
     """Degrees, of the even and of the odd part of each value: the shape of S, hence the size of Q.  The
     parts matter because D is N with w -> -w (up to a sign, see relations), so in N (a - w) - D (a + w) one
     of the two parts of N (a - w) cancels."""
+
     X = (NEG, 1)
     add = sub = staticmethod(lambda a, b: (max(a[0], b[0]), max(a[1], b[1])))
     mul = staticmethod(lambda a, b: (max(a[0] + b[0], a[1] + b[1]), max(a[0] + b[1], a[1] + b[0])))
@@ -157,11 +172,15 @@ class DegRing:
     even = staticmethod(lambda a: (10, NEG))
 
     @staticmethod
-    def conj_sub(x, y, sign): # x - y for y(w) = sign x(-w): twice the odd part of x if sign = 1, the even part if -1
+    def conj_sub(
+        x: tuple[int, int], y: tuple[int, int], sign: int
+    ) -> tuple[int, int]:  # x - y for y(w) = sign x(-w): twice the odd part of x if sign = 1, the even part if -1
         return (NEG, x[1]) if sign == 1 else (x[0], NEG)
 
 
-def relations(R, v, lines, commit=None):
+def relations(
+    R: Ring, v: dict[str, Any], lines: Sequence[tuple[bn254.Fp2, bn254.Fp2]], commit: Sequence[bool] | None = None
+) -> list[Any]:
     """The relations R_k in order, over the ring R.  v: the values (Prover.witness); lines: fixed_lines of
     delta; commit: the steps whose Miller value is committed (COMMIT).  The values are u = E(f), kept as
     fractions N / D of polynomials; at a committed step u = (a + w) / (a - w), and N, D start again from
@@ -171,26 +190,25 @@ def relations(R, v, lines, commit=None):
     X = R.X
     X3 = R.mul(R.mul(X, X), X)
     X5 = R.mul(R.mul(X3, X), X)
-    U = R.sub(R.mul(X3, X3), R.k(9)) # u = w^6 - 9
+    U = R.sub(R.mul(X3, X3), R.k(9))  # u = w^6 - 9
 
-    def phi(a): # an F_p2 element as a polynomial
+    def phi(a):  # an F_p2 element as a polynomial
         a = bn254._fp2(a)
         return R.add(R.k(a.c0), R.mul(R.k(a.c1), U))
 
-    def odd(Pt, c3, c4): # c3 xP w + c4 w^3: the line yP + c3 xP w + c4 w^3 without yP, its odd part
+    def odd(Pt, c3, c4):  # c3 xP w + c4 w^3: the line yP + c3 xP w + c4 w^3 without yP, its odd part
         return R.add(R.mul(R.mul(R.k(Pt[0]), X), c3), R.mul(X3, c4))
 
     xb, yb = v['B']
     ac = R.even(v['ac'])
-    cp, cm = R.add(ac, X), R.sub(ac, X) # c' = E(c) = cp / cm
+    cp, cm = R.add(ac, X), R.sub(ac, X)  # c' = E(c) = cp / cm
     win = v.get('win', {})
     rels = []
     pts = step_points(v['B'])
-    x, y, N, D = phi(xb), phi(yb), cm, cp # u = E(c^-1) = cm / cp
+    x, y, N, D = phi(xb), phi(yb), cm, cp  # u = E(c^-1) = cm / cp
     # D(w) = sign N(-w) throughout: true at the start, kept by every factor (g(-w) = h(w) for a factor
     # g / h), except a window's, which flips the sign; DegRing uses it
     sign = 1
-    conj_sub = getattr(R, 'conj_sub', lambda x_, y_, sg: R.sub(x_, y_))
     for i, kind in enumerate(STEPS):
         lam = phi(v['lam'][i])
         if kind == 'D':
@@ -198,24 +216,32 @@ def relations(R, v, lines, commit=None):
             x2 = R.sub(R.mul(lam, lam), R.mul(R.k(2), x))
             N, D = R.mul(N, N), R.mul(D, D)
         else:
-            xq, yq = phi(pts[kind][0]), phi(pts[kind][1])
+            q = pts[kind]
+            assert q is not None
+            xq, yq = phi(q[0]), phi(q[1])
             rels.append(R.sub(R.mul(lam, R.sub(xq, x)), R.sub(yq, y)))
             x2 = R.sub(R.sub(R.mul(lam, lam), x), xq)
-            if kind in ('A+', 'A-'): # times E(c^-1) or E(c)
+            if kind in ('A+', 'A-'):  # times E(c^-1) or E(c)
                 N, D = (R.mul(N, cm), R.mul(D, cp)) if kind == 'A+' else (R.mul(N, cp), R.mul(D, cm))
-        for b1, b2 in win.get(i, ()): # times (sigma + b2) / (sigma - b2), sigma = (kappa + b1^2) w + b1 b2 w^3 + b2^2 w^5
+        for b1, b2 in win.get(
+            i, ()
+        ):  # times (sigma + b2) / (sigma - b2), sigma = (kappa + b1^2) w + b1 b2 w^3 + b2^2 w^5
             B1, B2 = phi(b1), phi(b2)
-            sig = R.add(R.add(R.mul(R.add(phi(KAPPA), R.mul(B1, B1)), X), R.mul(R.mul(B1, B2), X3)), R.mul(R.mul(B2, B2), X5))
+            sig = R.add(
+                R.add(R.mul(R.add(phi(KAPPA), R.mul(B1, B1)), X), R.mul(R.mul(B1, B2), X3)), R.mul(R.mul(B2, B2), X5)
+            )
             N, D, sign = R.mul(N, R.add(sig, B2)), R.mul(D, R.sub(sig, B2)), -sign
-        m = R.sub(R.mul(lam, x), y) # lambda x - y, the c4 of B's line
-        ln = [(v['P'][1], odd(v['P'], R.sub(R.k(0), lam), m)),
-              (v['C'][1], odd(v['C'], phi(lines[i][0]), phi(lines[i][1])))]
+        m = R.sub(R.mul(lam, x), y)  # lambda x - y, the c4 of B's line
+        ln = [
+            (v['P'][1], odd(v['P'], R.sub(R.k(0), lam), m)),
+            (v['C'][1], odd(v['C'], phi(lines[i][0]), phi(lines[i][1]))),
+        ]
         lp = R.mul(R.add(R.k(ln[0][0]), ln[0][1]), R.add(R.k(ln[1][0]), ln[1][1]))
         lm = R.mul(R.sub(R.k(ln[0][0]), ln[0][1]), R.sub(R.k(ln[1][0]), ln[1][1]))
-        N, D = R.mul(N, lm), R.mul(D, lp) # E(l) = conj(l) / l, and conj(l)(w) = l(-w)
+        N, D = R.mul(N, lm), R.mul(D, lp)  # E(l) = conj(l) / l, and conj(l)(w) = l(-w)
         if commit[i]:
             a = R.even(v['a'][i])
-            rels.append(conj_sub(R.mul(N, R.sub(a, X)), R.mul(D, R.add(a, X)), sign))
+            rels.append(R.conj_sub(R.mul(N, R.sub(a, X)), R.mul(D, R.add(a, X)), sign))
             N, D, sign = R.add(a, X), R.sub(a, X), 1
         x, y = x2, R.sub(m, R.mul(lam, x2))
     rels.append(R.sub(x, phi(xb.conj() * bn254.FROB3[2])))
@@ -226,11 +252,11 @@ def relations(R, v, lines, commit=None):
     at = R.even(v['tau'])
     num = R.mul(R.mul(R.mul(R.mul(N, R.sub(a[0], t[0])), R.add(a[1], t[1])), R.sub(a[2], t[2])), R.sub(at, X))
     den = R.mul(R.mul(R.mul(R.mul(D, R.add(a[0], t[0])), R.sub(a[1], t[1])), R.add(a[2], t[2])), R.add(at, X))
-    rels.append(conj_sub(num, den, sign))
+    rels.append(R.conj_sub(num, den, sign))
     return rels
 
 
-def frob_w(R, n):
+def frob_w(R: Ring, n: int) -> Any:
     """t_n = pi^n(w) (poly.FROB_W): odd, of degree 7, 1, 7."""
     t = None
     for k, g in poly.FROB_W[n]:
@@ -241,7 +267,7 @@ def frob_w(R, n):
     return t
 
 
-def frob_even(R, a, n):
+def frob_even(R: Ring, a: Sequence[int], n: int) -> Any:
     """pi^n(a) for a in F_p6 given by its 6 coefficients, as a(t_n) = sum a_k t_n^2k: pi^n is a ring
     homomorphism fixing F_p, so a(t_n) = pi^n(a) modulo M.  It has degree 70 for n = 1, 3 and 10 for
     n = 2; the program evaluates it by Horner's rule in t_n(z)^2."""
@@ -253,7 +279,7 @@ def frob_even(R, a, n):
     return acc
 
 
-def horner(R, rels, r):
+def horner(R: Ring, rels: Sequence[Any], r: int) -> Any:
     """sum r^(n-1-k) R_k, the combination the program accumulates."""
     acc = R.k(0)
     for rel in rels:
@@ -261,21 +287,29 @@ def horner(R, rels, r):
     return acc
 
 
-def _degrees(commit, win=None):
+def _degrees(commit: Sequence[bool], win: dict[int, int] | None = None) -> list[int]:
     """The degrees of the relations (DegRing reads only the structure); win: step -> number of factors."""
     z = bn254.Fp2(0)
-    v = dict(P=(0, 0), B=bn254.G2_GEN, C=(0, 0), ac=[0] * 6, lam=[z] * N_STEPS, a=[[0] * 6] * N_STEPS, tau=[0] * 6,
-             win={i: [(bn254.Fp2(0), bn254.Fp2(0))] * k for i, k in (win or {}).items()})
+    v = {
+        'P': (0, 0),
+        'B': bn254.G2_GEN,
+        'C': (0, 0),
+        'ac': [0] * 6,
+        'lam': [z] * N_STEPS,
+        'a': [[0] * 6] * N_STEPS,
+        'tau': [0] * 6,
+        'win': {i: [(bn254.Fp2(0), bn254.Fp2(0))] * k for i, k in (win or {}).items()},
+    }
     return [max(d) for d in relations(DegRing, v, [(z, z)] * N_STEPS, commit)]
 
 
-def _shape(commit, win=None):
+def _shape(commit: Sequence[bool], win: dict[int, int] | None = None) -> tuple[int, int]:
     """The number of relations and the degree of S."""
     rels = _degrees(commit, win)
     return len(rels), max(rels)
 
 
-def schedule(cap):
+def schedule(cap: int) -> list[bool]:
     """The steps whose Miller value is committed: every addition, and left to right, a doubling is skipped
     whenever S stays within the degree cap.  A committed value costs 6 words of witness, a degree of S
     one word of Q.  The additions would mostly be committed anyway; committing all of them leaves the
@@ -290,12 +324,12 @@ def schedule(cap):
     return commit
 
 
-DEG_CAP = 171 # two doublings and an addition, uncommitted but the last: 37 Miller values are committed
+DEG_CAP = 171  # two doublings and an addition, uncommitted but the last: 37 Miller values are committed
 COMMIT = schedule(DEG_CAP)
-N_RELS, DEG_S = _shape(COMMIT) # 128 relations, degree 171
+N_RELS, DEG_S = _shape(COMMIT)  # 128 relations, degree 171
 
 
-def q_words(deg):
+def q_words(deg: int) -> int:
     """The coefficients of Q for S of degree deg: at least deg - 11, read in chunks of 8 (QCHUNK)."""
     return -((11 - deg) // 8) * 8
 
@@ -313,7 +347,7 @@ def q_words(deg):
 W_BITS, TOP_LO = 8, 248
 
 
-def windows(n):
+def windows(n: int) -> list[Window]:
     """(input, lowest bit, width) of the windows of n inputs, the top one of the first input first."""
     out = [(0, TOP_LO, 254 - TOP_LO)] if n else []
     for i in range(n):
@@ -321,12 +355,12 @@ def windows(n):
     return out
 
 
-def add_capacities(cap):
+def add_capacities(cap: int) -> dict[int, int]:
     """step -> the number of window factors its committed relation takes within the degree cap (a factor
     adds 17 or 8 to the degree: the parity of the relation alternates)."""
     j, rel = 0, {}
     for i, kind in enumerate(STEPS):
-        j += 1 # its slope relation
+        j += 1  # its slope relation
         if COMMIT[i]:
             if kind != 'D':
                 rel[i] = j
@@ -340,10 +374,10 @@ def add_capacities(cap):
     return room
 
 
-_PLANS = {}
+_PLANS: dict[int, tuple[int, Window | None, dict[int, list[Window]]]] = {}
 
 
-def window_plan(n):
+def window_plan(n: int) -> tuple[int, Window | None, dict[int, list[Window]]]:
     """(the degree of S, the window merged with the end's constant or None, step -> its windows) for n
     public inputs: the steps with the most room first, so that few steps carry windows, under the cap
     DEG_S, or under a higher one if the windows need it (more inputs; Q grows with it)."""
@@ -363,17 +397,17 @@ def window_plan(n):
     return _PLANS[n]
 
 
-def doublings_after(s):
-    return sum(1 for kind in STEPS[s + 1:] if kind == 'D')
+def doublings_after(s: int) -> int:
+    return sum(1 for kind in STEPS[s + 1 :] if kind == 'D')
 
 
 # ---------------------------------------------------------------------------------------------------
-# The transcript: r = SHA-256(inputs, points, s, c, c^-1, leaves), z = SHA-256(r, Q), all words big-endian
-def wbytes(ws):
+# The transcript: r = SHA-256(inputs, points, a_c, leaves), z = SHA-256(r, Q), all words big-endian
+def wbytes(ws: Sequence[int]) -> bytes:
     return b''.join(w.to_bytes(32, 'big') for w in ws)
 
 
-def blocks(n):
+def blocks(n: int) -> list[int]:
     """The hashing blocks of n words: blocks of 16, then powers of two."""
     out = []
     for k in (16, 8, 4, 2, 1):
@@ -385,18 +419,21 @@ def blocks(n):
     return out
 
 
-def leaf_words(kind, commit):
+def leaf_words(commit: bool) -> int:
     """lambda (2 words), a (6) if committed."""
     return 2 + 6 * commit
 
 
-def miller_values(pairs, c=None, factors=None):
+def miller_values(
+    pairs: Sequence[tuple[bn254.G1Point, bn254.G2Point]],
+    c: bn254.Fp12 | None = None,
+    factors: dict[int, list[bn254.Fp12]] | None = None,
+) -> list[bn254.Fp12]:
     """The Miller value after each step of the loop, as the relations have it: from f = c^-1, times c^-1 / c
     at the A+ / A- steps (from 1 and without them if c is None), times factors[i] at step i."""
-    (nA, B), _ = pairs
     lines = [[bn254.affine_line(cf, Pt) for _, cf in slopes(Q)] for Pt, Q in pairs]
-    ci = c.inv() if c is not None else None
-    f, out = (ci if c is not None else bn254.Fp12.one()), []
+    f = bn254.Fp12.one() if c is None else c.inv()
+    ci, out = f, []  # c^-1, if c is given
     for i, kind in enumerate(STEPS):
         if kind == 'D':
             f = f.square()
@@ -410,15 +447,27 @@ def miller_values(pairs, c=None, factors=None):
     return out
 
 
-def easy(f):
+def easy(f: bn254.Fp12) -> bn254.Fp12:
     """E(f) = f^(p^6 - 1) = conj(f) / f, in the torus T2: E(f) conj(E(f)) = 1."""
     return f.conj() * f.inv()
 
 
-W_TOWER = bn254.Fp12(bn254.Fp6(0), bn254.Fp6(1)) # w
+W_TOWER = bn254.Fp12(bn254.Fp6(0), bn254.Fp6(1))  # w
 
 
-def compress(u, inv=None):
+def batch_inv(xs: Sequence[bn254.Fp12]) -> list[bn254.Fp12]:
+    """The inverses of the nonzero xs in F_p12, with one inversion (Montgomery's trick)."""
+    pre = [bn254.Fp12.one()]
+    for x in xs:
+        pre.append(pre[-1] * x)
+    inv, out = pre[-1].inv(), [bn254.Fp12.one()] * len(xs)
+    for k in range(len(xs) - 1, -1, -1):
+        out[k] = inv * pre[k]
+        inv = inv * xs[k]
+    return out
+
+
+def compress(u: bn254.Fp12, inv: bn254.Fp12 | None = None) -> list[int]:
     """a in F_p6 with u = (a + w) / (a - w), for u != 1 in T2: a = w (u + 1) / (u - 1), as the 6
     coefficients of a polynomial in w^2.  inv: (u - 1)^-1 if known."""
     ensure(u != bn254.Fp12.one(), 'u = 1 has no compressed form')
@@ -427,45 +476,32 @@ def compress(u, inv=None):
     return d[0::2]
 
 
-def compress_all(us):
-    """compress of each, with one inversion (Montgomery's trick)."""
+def compress_all(us: Sequence[bn254.Fp12]) -> list[list[int]]:
+    """compress of each, with one inversion."""
     one = bn254.Fp12.one()
-    ds = [u - one for u in us]
-    pre = [one]
-    for d in ds:
-        pre.append(pre[-1] * d)
-    inv, out = pre[-1].inv(), [None] * len(us)
-    for k in range(len(us) - 1, -1, -1):
-        out[k] = compress(us[k], inv * pre[k])
-        inv = inv * ds[k]
-    return out
+    return [compress(u, inv) for u, inv in zip(us, batch_inv([u - one for u in us]))]
 
 
 KAPPA = (bn254.Fp2(3) * bn254.XI).inv()
 
 
-def compress6_all(us):
+def compress6_all(us: Sequence[bn254.Fp12]) -> list[tuple[bn254.Fp2, bn254.Fp2]]:
     """(b1, b2) in F_p2 for each u != 1 of the cyclotomic subgroup T6 (which holds the group of order r):
     u = (s + 1) / (s - 1) with s = b0 w + b1 w^3 + b2 w^5 odd, and on T6, b0 b2 - b1^2 = kappa = 1 / (3 xi),
     so b0 follows from b1 and b2 (b2 != 0 but for about p^2 of the p^4 - p^2 + 1 elements).  4 words
-    where the torus T2 takes 6.  One inversion for all (Montgomery's trick)."""
+    where the torus T2 takes 6.  One inversion for all."""
     one = bn254.Fp12.one()
-    ds = [u - one for u in us]
-    pre = [one]
-    for d in ds:
-        pre.append(pre[-1] * d)
-    inv, out = pre[-1].inv(), [None] * len(us)
-    for k in range(len(us) - 1, -1, -1):
-        sv = (us[k] + one) * (inv * pre[k])
-        inv = inv * ds[k]
+    out = []
+    for u, inv in zip(us, batch_inv([u - one for u in us])):
+        sv = (u + one) * inv
         ensure(sv.c0 == bn254.Fp6(0), 'not in T2')
         b0, b1, b2 = sv.c1.c0, sv.c1.c1, sv.c1.c2
         ensure(b2 != bn254.Fp2(0) and b0 * b2 - b1 * b1 == KAPPA, 'not in T6, or b2 = 0')
-        out[k] = (b1, b2)
+        out.append((b1, b2))
     return out
 
 
-def gt_constants(ic, gamma):
+def gt_constants(ic: Sequence[bn254.G1Point], gamma: bn254.G2Point) -> list[bn254.Fp12]:
     """K_i in F_p12 with K_i^h = e(IC_i, gamma), h = (p^12 - 1) / r: the pairing itself to the power
     h^-1 mod r, so in the group of order r.  The Miller loop of (L, gamma) is replaced by a product of
     their powers."""
@@ -479,7 +515,7 @@ class Prover:
     window, the compressed E-images of its factors by digit, and the end's constants (tau) by the digit of
     the window merged with them."""
 
-    def __init__(self, delta, const, gt):
+    def __init__(self, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12]) -> None:
         self.lines = fixed_lines(delta)
         self.const, self.gt, self.n = const, gt, len(gt) - 1
         deg, self.top, self.plan = window_plan(self.n)
@@ -487,9 +523,12 @@ class Prover:
         offset = [sum(1 << lo for i2, lo, _ in windows(self.n) if i2 == i) for i in range(self.n)]
         inv2 = pow(2, -1, bn254.R)
         # a window at step s: digit d multiplies in K_i^((d + 1) 2^lo / 2^k), k the doublings after s
-        self.expo = {(s, win): (1 << win[1]) * pow(inv2, doublings_after(s), bn254.R) % bn254.R
-                     for s, wins in self.plan.items() for win in wins}
-        self.tables = {}
+        self.expo = {
+            (s, win): (1 << win[1]) * pow(inv2, doublings_after(s), bn254.R) % bn254.R
+            for s, wins in self.plan.items()
+            for win in wins
+        }
+        self.tables: dict[tuple[int, Window], list[tuple[bn254.Fp2, bn254.Fp2]]] = {}
         for (s, (i, lo, width)), e in self.expo.items():
             base = gt[i + 1] ** e
             us, g = [], base
@@ -510,28 +549,36 @@ class Prover:
             for _ in range(1 << width):
                 self.tau_consts.append(g)
                 g = g * base
-        self.taus = compress_all([easy(t).conj() for t in self.tau_consts]) # E(W27) = 1: no selector
+        self.taus = compress_all([easy(t).conj() for t in self.tau_consts])  # E(W27) = 1: no selector
 
     @staticmethod
-    def digit(inputs, win):
+    def digit(inputs: Sequence[int], win: Window) -> int:
         i, lo, width = win
         return (inputs[i] >> lo) & ((1 << width) - 1)
 
-    def factors(self, inputs):
+    def factors(self, inputs: Sequence[int]) -> dict[int, list[bn254.Fp12]]:
         """step -> the factors of F_p12 its windows multiply in, for these inputs."""
-        return {s: [self.gt[win[0] + 1] ** ((self.digit(inputs, win) + 1) * self.expo[(s, win)] % bn254.R) for win in wins]
-                for s, wins in self.plan.items()}
+        return {
+            s: [self.gt[win[0] + 1] ** ((self.digit(inputs, win) + 1) * self.expo[(s, win)] % bn254.R) for win in wins]
+            for s, wins in self.plan.items()
+        }
 
-    def end_digit(self, inputs):
+    def end_digit(self, inputs: Sequence[int]) -> int:
         """The digit that selects the end's constant."""
         return 0 if self.top is None else self.digit(inputs, self.top)
 
-    def product(self, pairs, inputs):
+    def product(self, pairs: Sequence[tuple[bn254.G1Point, bn254.G2Point]], inputs: Sequence[int]) -> bn254.Fp12:
         """The Miller value of everything: the pairs, the inputs' term and (alpha, beta).  Its h-th power is 1
         iff the pairing check holds."""
         return miller_values(pairs, factors=self.factors(inputs))[-1] * self.tau_consts[self.end_digit(inputs)]
 
-    def witness(self, pairs, inputs, residue=None, check=True):
+    def witness(
+        self,
+        pairs: Sequence[tuple[bn254.G1Point, bn254.G2Point]],
+        inputs: Sequence[int],
+        residue: tuple[bn254.Fp12, int] | None = None,
+        check: bool = True,
+    ) -> dict[str, Any] | None:
         """The witness, or None if the product of the pairings is not 1.  Tests may give the residue
         witness (c, s) and seal without checking the relations (seal).  The relations hold for
         E(c) and E(f), so s is not needed."""
@@ -541,20 +588,34 @@ class Prover:
         if res is None:
             return None
         c, _ = res
-        a = [compress(easy(f)) if COMMIT[i] else None for i, f in enumerate(miller_values(pairs, c, self.factors(inputs)))]
+        a = [
+            compress(easy(f)) if COMMIT[i] else None
+            for i, f in enumerate(miller_values(pairs, c, self.factors(inputs)))
+        ]
         win = {s: [self.tables[(s, w)][self.digit(inputs, w)] for w in wins] for s, wins in self.plan.items()}
-        v = dict(P=nA, B=B, C=C, ac=compress(easy(c)), lam=[lam for lam, _ in slopes(B)], a=a, win=win,
-                 tau=self.taus[self.end_digit(inputs)])
+        v = {
+            'P': nA,
+            'B': B,
+            'C': C,
+            'ac': compress(easy(c)),
+            'lam': [lam for lam, _ in slopes(B)],
+            'a': a,
+            'win': win,
+            'tau': self.taus[self.end_digit(inputs)],
+        }
         return self.seal(v, inputs, check)
 
-    def seal(self, v, inputs, check=True):
+    def seal(self, v: dict[str, Any], inputs: Sequence[int], check: bool = True) -> dict[str, Any]:
         """The witness words of the values v: the committed words, then r, Q and z.  check=False lets a
         test seal values whose relations do not hold (Q is then S / M without its remainder)."""
         mont = lambda xs: [to_mont(x % P) for x in xs]
         fp2 = lambda a: mont([a.c0, a.c1])
         nA, B, C = v['P'], v['B'], v['C']
-        w = dict(points=mont([nA[0], nA[1], B[0].c0, B[0].c1, B[1].c0, B[1].c1, C[0], C[1]]), ac=mont(v['ac']),
-                 leaves=[fp2(v['lam'][i]) + (mont(v['a'][i]) if COMMIT[i] else []) for i in range(N_STEPS)])
+        w: dict[str, Any] = {
+            'points': mont([nA[0], nA[1], B[0].c0, B[0].c1, B[1].c0, B[1].c1, C[0], C[1]]),
+            'ac': mont(v['ac']),
+            'leaves': [fp2(v['lam'][i]) + (mont(v['a'][i]) if COMMIT[i] else []) for i in range(N_STEPS)],
+        }
         t = wbytes(inputs) + wbytes(w['points']) + wbytes(w['ac']) + b''.join(map(wbytes, w['leaves']))
         w['r'] = int.from_bytes(hashlib.sha256(t).digest(), 'big')
         q, rem = poly.divmod_m(horner(PolyRing, relations(PolyRing, v, self.lines), from_mont(w['r'])))
@@ -570,15 +631,15 @@ class Prover:
 # The program
 #
 # The loop state is (((N, D, acc, x, y), h), run): N / D = u at z, acc the Horner sum of the relations so
-# far, (x, y) = B's point at z, h the SHA-256 context of the transcript, and the run values below,
-# computed once from z, r and the points.  zeta = z^6 - 9 is the tower's u (u^2 = -1) at z; X, Y are the
+# far, (x, y) = B's point at z, h the SHA-256 context of the transcript, and the run values, computed once
+# in the setup from z, r and the points.  zeta = z^6 - 9 is the tower's u (u^2 = -1) at z; X, Y are the
 # x, y of a point at zeta.
-# The run values the step functions read, and the others (for the additions' arguments and the end).
-# A step function gets only the first, and the loop passes the second around it.
-# RUN_STEP is two subtrees: the values every step reads, and those only a committed step reads (the
-# powers of z for a(z), and r^2), so a step without a commitment gets the first alone.
-# RUN_REST ends with the public inputs whose windows are multiplied in at addition steps ('in0', ...):
-# words, not field elements.
+#
+# run = (RUN_STEP, the rest).  A step function gets RUN_STEP only, and the loop passes the rest around it.
+# RUN_STEP is two subtrees: RUN_ANY, which every step reads, and RUN_COMMIT, which only a committed step
+# reads (the powers of z for a(z), and r^2), so a step without a commitment gets RUN_ANY alone.  The rest
+# (PairingCheck.run_rest) is RUN_FIELD, for the additions' arguments, then the public inputs whose windows
+# are multiplied in at addition steps ('in0', ...: words, not field elements).
 RUN_ANY = ['z3', 'zeta', 'z3zeta', 'nxpz', 'yp', 'xcz', 'xczz', 'yc', 'r']
 RUN_COMMIT = ['z1', 'z2', 'z4', 'z6', 'z8', 'z10', 'r2']
 RUN_STEP = RUN_ANY + RUN_COMMIT
@@ -589,9 +650,14 @@ END = ['pn', 'npd', 'z5', 'z7', 'r3']
 # (xQ, yQ, gN, gD): u times E(c^-1) = cm / cp at A+, E(c) = cp / cm at A-, 1 at the Frobenius additions.
 # -B = (XB, -YB), and -pi^2(B) = (omega XB, YB) for the cube root of unity omega = FROB2[2]: these two
 # are computed where they are used, from the run values (DERIVED: run value, constant factor).
-Q_KEYS = {'A+': ('XB', 'YB', 'cm', 'cp'), 'A-': ('XB', 'nYB', 'cp', 'cm'), 'F1': ('X1', 'Y1', None, None), 'F2': ('X2', 'YB', None, None)}
+Q_KEYS = {
+    'A+': ('XB', 'YB', 'cm', 'cp'),
+    'A-': ('XB', 'nYB', 'cp', 'cm'),
+    'F1': ('X1', 'Y1', None, None),
+    'F2': ('X2', 'YB', None, None),
+}
 DERIVED = {'nYB': ('YB', -1), 'X2': ('XB', bn254.FROB2[2].c0)}
-N_STATE = 5 # N, D, acc, x, y
+N_STATE = 5  # N, D, acc, x, y
 
 
 class PairingCheck:
@@ -599,16 +665,18 @@ class PairingCheck:
     (alpha, beta); gt: gt_constants of the IC points and gamma; b: the bounds of the loop state
     (bounds())."""
 
-    def __init__(self, fp, delta, const, gt, b=None):
+    def __init__(
+        self, fp: Fp, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12], b: dict[str, int] | None = None
+    ) -> None:
         self.fp, self.be, self.cv = fp, fp.be, Curve(fp)
         self.prover = pr = Prover(delta, const, gt)
         # per step, the line constants of delta: c3 and c4, two Montgomery words each
         self.data = [[to_mont(a % P) for cf in pr.lines[i] for a in (cf.c0, cf.c1)] for i in range(N_STEPS)]
         mont6 = lambda a: [[to_mont(x) for x in a[:4]], [to_mont(x) for x in a[4:]]]
-        mont4 = lambda b: [[to_mont(x) for x in (b[0].c0, b[0].c1, b[1].c0, b[1].c1)]] # one wide constant
+        mont4 = lambda b: [[to_mont(x) for x in (b[0].c0, b[0].c1, b[1].c0, b[1].c1)]]  # one wide constant
         self.win_tables = {key: [mont4(b) for b in tab] for key, tab in pr.tables.items()}
         self.tau_table = [mont6(a) for a in pr.taus]
-        self.ins = sorted({i for wins in pr.plan.values() for i, _, _ in wins}) # inputs read in the loop
+        self.ins = sorted({i for wins in pr.plan.values() for i, _, _ in wins})  # inputs read in the loop
         self.run_rest = RUN_FIELD + [f'in{i}' for i in self.ins]
         self.run = RUN_STEP + self.run_rest
         self.b = dict(b) if b is not None else {}
@@ -617,36 +685,44 @@ class PairingCheck:
             self.sample_bounds()
         be = self.be
         self.TOP2 = be.function('TOP2', [words(4), words(2)], lambda a: be.checks([self.top2_zero(w) for w in flat(a)]))
-        self.steps = {}
+        self.steps: dict[tuple[str, bool], Any] = {}
         for kind, args in (('D', None), ('A', words(4)), ('F', words(4))):
             for commit in sorted({COMMIT[k] for k in range(N_STEPS) if self.fn_of(k)[0] == kind}):
                 st = self.state_shape(run_rest=False, commit=commit)
-                shape = [[st, leaf_shape({'D': 'D', 'A': 'A+', 'F': 'F1'}[kind], commit)], words(4) if args is None else [args, words(4)]]
+                shape = [[st, leaf_shape(commit)], words(4) if args is None else [args, words(4)]]
                 name = f'STEP_{kind}' + ('' if commit else '_')
                 self.steps[(kind, commit)] = be.function(name, shape, self.step_body(kind, commit))
         self.QCHUNK = be.function('QCHUNK', [[words(2), words(7)], words(8)], self.qchunk_body)
         self.EVAL = be.function('EVAL', [[words(4), words(2)], E('', 256, 0)], self.eval_body)
         self.T6 = be.function('T6', [words(4), words(4)], self.t6_body) if pr.plan else None
         if is_sym(be):
-            self.costs = {fn.t: fn.c for fn in list(self.steps.values()) + [self.QCHUNK, self.EVAL] + ([self.T6] if self.T6 else [])}
+            self.costs = {
+                fn.t: fn.c
+                for fn in list(self.steps.values()) + [self.QCHUNK, self.EVAL] + ([self.T6] if self.T6 else [])
+            }
 
     @staticmethod
-    def fn_of(k):
+    def fn_of(k: int) -> tuple[str, bool]:
         """(function kind, commit) of step k.  A Frobenius addition with a committed value runs the addition's
         function with g = 1, which saves a function."""
         kind = STEPS[k][0]
         return ('A' if kind == 'F' and COMMIT[k] else kind), COMMIT[k]
 
-    def one(self): return self.fp.const(1)
-    def m1(self): return self.fp.const(P - 1)
-    def rd(self, pairs): return self.fp.reduce_dot(pairs)
+    def one(self) -> Val:
+        return self.fp.const(1)
 
-    def rd_plus(self, pairs, v):
+    def m1(self) -> Val:
+        return self.fp.const(P - 1)
+
+    def rd(self, pairs: Sequence[tuple[Val, Val]]) -> Val:
+        return self.fp.reduce_dot(pairs)
+
+    def rd_plus(self, pairs: Sequence[tuple[Val, Val]], v: Val) -> Val:
         """rd(pairs) + v: a term v 1 is added after the reduction, which saves its two products."""
         return self.fp.add(self.rd(pairs), v)
 
     # hashing and the committed words
-    def top2_zero(self, w):
+    def top2_zero(self, w: Term) -> Term:
         """The word is below 2^254: its two top bits are 0.  Committed words are multiplied in long dot
         products, whose CRT bound a full 256-bit word would exceed."""
         be = self.be
@@ -655,7 +731,7 @@ class PairingCheck:
             return 0
         return be.verify(be.not1(be.jet('or_1', be.sub(w, 'OOOOOOO', 2), 1)))
 
-    def top2_6(self, ws):
+    def top2_6(self, ws: Any) -> Term:
         """top2_zero of 6 projected words (4 + 2), by TOP2."""
         be = self.be
         if not is_sym(be):
@@ -664,11 +740,11 @@ class PairingCheck:
             return 0
         return be.call(self.TOP2, [be.subtree(ws)])
 
-    def sha_init(self):
+    def sha_init(self) -> Any:
         be = self.be
         return be.jet('sha_256_ctx_8_init', be.unit(), SHA_CTX_W) if is_sym(be) else b''
 
-    def sha_add(self, h, parts):
+    def sha_add(self, h: Any, parts: Sequence[Any]) -> Any:
         """Absorb projections of 1, 2, 4, 8 or 16 words."""
         be = self.be
         if not is_sym(be):
@@ -678,24 +754,28 @@ class PairingCheck:
             h = be.jet(f'sha_256_ctx_8_add_{x.w // 8}', be.pair(h, x), SHA_CTX_W)
         return h
 
-    def sha_final(self, h):
+    def sha_final(self, h: Any) -> Term:
         be = self.be
-        return be.jet('sha_256_ctx_8_finalize', h, 256) if is_sym(be) else int.from_bytes(hashlib.sha256(h).digest(), 'big')
+        return (
+            be.jet('sha_256_ctx_8_finalize', h, 256)
+            if is_sym(be)
+            else int.from_bytes(hashlib.sha256(h).digest(), 'big')
+        )
 
     # one step
     @staticmethod
-    def run_shape(commit=True):
+    def run_shape(commit: bool = True) -> Shape:
         """The shape of RUN_STEP, or of RUN_ANY alone."""
         return [words(len(RUN_ANY)), words(len(RUN_COMMIT))] if commit else words(len(RUN_ANY))
 
-    def state_shape(self, run_rest=True, commit=True):
+    def state_shape(self, run_rest: bool = True, commit: bool = True) -> Shape:
         """((N, D, acc, x, y), h), (the run values); a step function's state is (N, D, acc, x, y) and only
         RUN_STEP, or only RUN_ANY if the step commits nothing."""
         if run_rest:
             return [[words(N_STATE), E('', SHA_CTX_W, 0)], [self.run_shape(), words(len(self.run_rest))]]
-        return [words(N_STATE), self.run_shape(commit)] # the step function: h is updated around it
+        return [words(N_STATE), self.run_shape(commit)]  # the step function: h is updated around it
 
-    def step_body(self, kind, commit):
+    def step_body(self, kind: str, commit: bool) -> Any:
         """Body of a step function: ((((N, D, acc, x, y), RUN_STEP values), leaf), args) -> (N, D, acc, x,
         y).  Evaluates lambda and the lines at z and -z, the next N and D, and a committed value at z, and
         adds the step's relations to acc in the order of `relations`.  The loop absorbs the leaf into h."""
@@ -709,8 +789,15 @@ class PairingCheck:
             aw = flat(leaf[1]) if commit else []
             data = args if kind == 'D' else args[1]
             run = dict(zip(RUN_STEP if commit else RUN_ANY, flat(run)))
-            c = {'N': Val(N, b['N']), 'D': Val(D, b['D']), 'acc': Val(acc, b['acc']), 'x': Val(x, b['x']), 'y': Val(y, b['y']),
-                 'l': [Val(w, WORD_MAX) for w in leaf[0]], 'dd': [Val(w, P - 1) for w in data]}
+            c = {
+                'N': Val(N, b['N']),
+                'D': Val(D, b['D']),
+                'acc': Val(acc, b['acc']),
+                'x': Val(x, b['x']),
+                'y': Val(y, b['y']),
+                'l': [Val(w, WORD_MAX) for w in leaf[0]],
+                'dd': [Val(w, P - 1) for w in data],
+            }
             if commit:
                 c['a'] = [Val(w, F_HI) for w in aw]
                 c['zp'] = [Val(run[f'z{k}'], KB) for k in (1, 2, 4, 6, 8, 10)]
@@ -718,24 +805,48 @@ class PairingCheck:
                 c[nm] = Val(run[nm], KB)
             if add:
                 c['xq'], c['yq'], c['gn'], c['gd'] = (Val(w, KB) for w in args[0])
-            at_zeta = lambda c, a: rd([(a[1], c['zeta']), (a[0], one())]) # a0 + a1 zeta
+            at_zeta = lambda c, a: rd([(a[1], c['zeta']), (a[0], one())])  # a0 + a1 zeta
 
             def first(c):
                 out = [at_zeta(c, c['l'])]
-                if commit: # a(z) = sum a_k z^2k
+                if commit:  # a(z) = sum a_k z^2k
                     a, zp = c['a'], c['zp']
                     out.append(rd([(a[0], one())] + [(a[k], zp[k]) for k in range(1, 6)]))
                 return out + ([fp.sub(c['xq'], c['x'])] if add else [])
+
             minus_x3 = (lambda c: [(c['x'], m1()), (c['xq'], m1())]) if add else (lambda c: [(c['x'], fp.const(P - 2))])
-            steps = [('push', ['lam'] + (['az'] if commit else []) + (['dx'] if add else []), first),
-                     ('drop', ['l'] + (['a'] if commit else [])),
-                     ('push', ['x2', 'm'] + (['azp', 'azm'] if commit else []), lambda c: [
-                         rd([(c['lam'], c['lam'])] + minus_x3(c)), rd([(c['lam'], c['x']), (c['y'], m1())])] +
-                         ([fp.normalize(fp.add(c['az'], c['zp'][0])), fp.normalize(fp.sub(c['az'], c['zp'][0]))] if commit else [])),
-                     # the odd parts of the lines; a line at z is yP + o, at -z (its conjugate) yP - o
-                     ('push', ['oB', 'od'], lambda c: [
-                         rd([(c['nxpz'], c['lam']), (c['z3'], c['m'])]),
-                         rd([(c['xcz'], c['dd'][0]), (c['xczz'], c['dd'][1]), (c['z3'], c['dd'][2]), (c['z3zeta'], c['dd'][3])])])]
+            steps = [
+                ('push', ['lam'] + (['az'] if commit else []) + (['dx'] if add else []), first),
+                ('drop', ['l'] + (['a'] if commit else [])),
+                (
+                    'push',
+                    ['x2', 'm'] + (['azp', 'azm'] if commit else []),
+                    lambda c: (
+                        [rd([(c['lam'], c['lam'])] + minus_x3(c)), rd([(c['lam'], c['x']), (c['y'], m1())])]
+                        + (
+                            [fp.normalize(fp.add(c['az'], c['zp'][0])), fp.normalize(fp.sub(c['az'], c['zp'][0]))]
+                            if commit
+                            else []
+                        )
+                    ),
+                ),
+                # the odd parts of the lines; a line at z is yP + o, at -z (its conjugate) yP - o
+                (
+                    'push',
+                    ['oB', 'od'],
+                    lambda c: [
+                        rd([(c['nxpz'], c['lam']), (c['z3'], c['m'])]),
+                        rd(
+                            [
+                                (c['xcz'], c['dd'][0]),
+                                (c['xczz'], c['dd'][1]),
+                                (c['z3'], c['dd'][2]),
+                                (c['z3zeta'], c['dd'][3]),
+                            ]
+                        ),
+                    ],
+                ),
+            ]
 
             def final(c, _):
                 lam, m, x2 = c['lam'], c['m'], c['x2']
@@ -747,7 +858,7 @@ class PairingCheck:
                 Lp, Lm = rd([(lp[0], lp[1])]), rd([(lm[0], lm[1])])
                 if kind == 'D':
                     N2, D2 = rd([(c['N'], c['N'])]), rd([(c['D'], c['D'])])
-                    rels = [[(lam, c['y']), (c['x'], fp.mul_const(c['x'], -THREE_HALVES))]] # as dot products
+                    rels = [[(lam, c['y']), (c['x'], fp.mul_const(c['x'], -THREE_HALVES))]]  # as dot products
                 else:
                     N2, D2 = rd([(c['N'], c['gn'])]), rd([(c['D'], c['gd'])])
                     rels = [[(lam, c['dx']), (c['yq'], m1()), (c['y'], one())]]
@@ -758,7 +869,7 @@ class PairingCheck:
                 terms = [(c['acc'], r_pow(n))]
                 for k, rel in enumerate(rels):
                     terms += rel if n - 1 - k == 0 else [(rd(rel), r_pow(n - 1 - k))]
-                if commit: # N (a - z) - D (a + z), then N, D = a + z, a - z
+                if commit:  # N (a - z) - D (a + z), then N, D = a + z, a - z
                     acc2 = rd(terms + [(Nn, c['azm']), (Dn, fp.neg(c['azp']))])
                     N3, D3 = c['azp'], c['azm']
                 else:
@@ -768,21 +879,25 @@ class PairingCheck:
                 for nm, v in zip(('N', 'D', 'acc', 'x', 'y'), outs):
                     b[nm + '_out'] = max(b.get(nm + '_out', 0), v.hi)
                 return fp.pack(outs)
+
             new = chain(fp, c, steps, final)
             return be.seq(self.top2_6(leaf[1]), new) if commit else new
+
         return body
 
-    def qchunk_body(self, accs):
+    def qchunk_body(self, accs: Any) -> Term:
         """Body of QCHUNK: ((qz, z^8), (z .. z^7)), 8 coefficients of Q -> qz z^8 + their polynomial at z.
         Q(z) is this step from the top chunk down; the coefficients are checked below 2^254."""
         ((qz, z8), zp), q = accs
         one, b = self.one(), self.b
-        out = self.rd([(Val(qz, b['qz']), Val(z8, KB)), (Val(q[0], F_HI), one)] +
-                      [(Val(q[k], F_HI), Val(zp[k - 1], KB)) for k in range(1, 8)])
+        out = self.rd(
+            [(Val(qz, b['qz']), Val(z8, KB)), (Val(q[0], F_HI), one)]
+            + [(Val(q[k], F_HI), Val(zp[k - 1], KB)) for k in range(1, 8)]
+        )
         b['qz_out'] = max(b.get('qz_out', 0), out.hi)
         return self.be.seq(self.be.checks([self.top2_zero(w) for w in q]), out.e)
 
-    def eval_body(self, accs):
+    def eval_body(self, accs: Any) -> Term:
         """Body of EVAL: ((a_0 .. a_3, a_4 a_5), t^2) -> a(t) = sum a_k t^2k by Horner, for an element a of F_p6
         (words below 2^254: committed words, or constants) and t^2 below KB."""
         a, t2 = accs
@@ -791,14 +906,19 @@ class PairingCheck:
         acc = Val(a[5], F_HI)
         for k in range(4, -1, -1):
             # the inner terms join after the reduction; the last one inside it, so that a(t) is reduced
-            acc = self.rd([(acc, t2), (Val(a[k], F_HI), self.one())]) if k == 0 else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
+            acc = (
+                self.rd([(acc, t2), (Val(a[k], F_HI), self.one())])
+                if k == 0
+                else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
+            )
         self.eval_hi = acc.hi
         return acc.e
 
-    def eval_at(self, coeffs, t2):
+    def eval_at(self, coeffs: Any, t2: Val) -> Val:
         """a(t) for the 6 words of a (projected, one subtree, 4 + 2 words; or a constant) and t^2, by EVAL."""
         t2 = t2 if t2.hi <= KB else self.fp.normalize(t2)
         be = self.be
+        a: Any
         if not is_sym(be):
             a = [[x.e if isinstance(x, Val) else x for x in g] for g in coeffs]
         elif isinstance(coeffs, E):
@@ -807,13 +927,13 @@ class PairingCheck:
             a = be.subtree([v.e for v in flat(coeffs)])
         return Val(be.call(self.EVAL, [a, t2.e]), self.eval_hi)
 
-    def sample_bounds(self):
+    def sample_bounds(self) -> None:
         """The bounds of the loop state: a fixed point of the step bodies, found on the numeric backend by
         widening the inputs (1% slack) until the outputs fit."""
         b = self.b
         names = ('N', 'D', 'acc', 'x', 'y', 'qz')
-        b.update({nm: KB for nm in names})
-        st = [[0] * N_STATE, [0] * len(RUN_STEP)] # a step without a commitment reads the first len(RUN_ANY)
+        b.update(dict.fromkeys(names, KB))
+        st = [[0] * N_STATE, [0] * len(RUN_STEP)]  # a step without a commitment reads the first len(RUN_ANY)
         for _ in range(30):
             for nm in names:
                 b[nm + '_out'] = 0
@@ -829,7 +949,7 @@ class PairingCheck:
         raise RuntimeError('no fixed point for the loop bounds')
 
     # the loop
-    def step_value(self, k, st, leaf, data=None):
+    def step_value(self, k: int, st: Any, leaf: Any, data: Any = None) -> Any:
         """The state after step k: the step function on the state without self.run_rest, which is put back.
         data: the step's line constants of delta, if they are given (an accessor), else constants here."""
         be = self.be
@@ -853,61 +973,104 @@ class PairingCheck:
                     ensure(v.hi <= KB, f'run value bound: {nm}')
                     return v.e
                 return sub(run[nm])
+
             q = [arg(nm) for nm in Q_KEYS[kind][:2]]
-            if k in self.prover.plan: # g_N, g_D times the factors of the step's windows
+            if k in self.prover.plan:  # g_N, g_D times the factors of the step's windows
                 g = self.win_factors(k, run, Q_KEYS[kind][2:])
                 q = [q, g] if is_sym(be) else q + g
             else:
                 q += [arg(nm) for nm in Q_KEYS[kind][2:]]
             out = be.call(fn, [env, [q, data]])
         # the transcript absorbs the leaf: lambda, and a if committed
-        lf = be.split(leaf, leaf_shape(kind, COMMIT[k])) if is_sym(be) else leaf
+        lf = be.split(leaf, leaf_shape(COMMIT[k])) if is_sym(be) else leaf
         h2 = self.sha_add(st[0][1], [lf[0]] + ([lf[1][0], lf[1][1]] if COMMIT[k] else []))
         return be.pack([[out, h2], sub(st[1])]) if is_sym(be) else [[out, h2], st[1]]
 
-    def prod(self, vs):
-        """The product of the values, as a balanced tree of products."""
+    def prod(self, vs: Sequence[Val]) -> Val:
+        """The product of the values, as a balanced tree of products.  A product of two values reduced from
+        large bounds has a bound about as large, so with many factors (a step with ten windows, from three
+        public inputs) a product would exceed the CRT bound: then its larger operand is normalised first."""
+
+        def mul(a: Val, b: Val) -> Val:
+            if a.hi * b.hi >= CRT_MAX:
+                a, b = (self.fp.normalize(a), b) if a.hi >= b.hi else (a, self.fp.normalize(b))
+            return self.rd([(a, b)])
+
         while len(vs) > 1:
-            vs = [self.rd([(vs[k], vs[k + 1])]) if k + 1 < len(vs) else vs[k] for k in range(0, len(vs), 2)]
+            vs = [mul(vs[k], vs[k + 1]) if k + 1 < len(vs) else vs[k] for k in range(0, len(vs), 2)]
         return vs[0]
 
-    def t6_body(self, accs):
+    def t6_body(self, accs: Any) -> Term:
         """Body of T6: ((b1, b2 as 4 words), (z, z^2, zeta, K)) -> (sigma + B2, sigma - B2) at z, for the
         window factor (sigma + b2) / (sigma - b2), sigma = (kappa + b1^2) w + b1 b2 w^3 + b2^2 w^5: B1, B2
         are b1, b2 at zeta, K is kappa at zeta, and sigma(z) = z (K + B1^2 + z^2 B2 (B1 + z^2 B2))."""
         fp, rd = self.fp, self.rd
         bw, (z, z2, zeta, k) = accs
-        c = {'b': [Val(w, P - 1) for w in bw], 'z': Val(z, KB), 'z2': Val(z2, KB), 'zeta': Val(zeta, KB), 'K': Val(k, KB)}
-        steps = [('push', ['B1', 'B2'], lambda c: [self.rd_plus([(c['b'][1], c['zeta'])], c['b'][0]),
-                                                  rd([(c['b'][3], c['zeta']), (c['b'][2], self.one())])]), # reduced: sigma - B2 is multiplied
-                 ('push', ['T'], lambda c: [rd([(c['z2'], c['B2'])])]), # read twice below
-                 ('push', ['S'], lambda c: [rd([(c['K'], c['z']), (rd([(c['B1'], c['B1'])]), c['z']),
-                                                (rd([(c['T'], fp.add(c['B1'], c['T']))]), c['z'])])])]
+        c = {
+            'b': [Val(w, P - 1) for w in bw],
+            'z': Val(z, KB),
+            'z2': Val(z2, KB),
+            'zeta': Val(zeta, KB),
+            'K': Val(k, KB),
+        }
+        steps = [
+            (
+                'push',
+                ['B1', 'B2'],
+                lambda c: [
+                    self.rd_plus([(c['b'][1], c['zeta'])], c['b'][0]),
+                    rd([(c['b'][3], c['zeta']), (c['b'][2], self.one())]),
+                ],
+            ),  # reduced: sigma - B2 is multiplied
+            ('push', ['T'], lambda c: [rd([(c['z2'], c['B2'])])]),  # read twice below
+            (
+                'push',
+                ['S'],
+                lambda c: [
+                    rd(
+                        [
+                            (c['K'], c['z']),
+                            (rd([(c['B1'], c['B1'])]), c['z']),
+                            (rd([(c['T'], fp.add(c['B1'], c['T']))]), c['z']),
+                        ]
+                    )
+                ],
+            ),
+        ]
 
         def final(c, _):
             out = [fp.add(c['S'], c['B2']), fp.sub(c['S'], c['B2'])]
             self.t6_hi = [v.hi for v in out]
             return fp.pack(out)
+
         return chain(fp, c, steps, final)
 
-    def win_factors(self, s, run, base):
+    def win_factors(self, s: int, run: dict[str, Term], base: Sequence[str | None]) -> Term:
         """(g_N, g_D) at addition step s: base (the names of E(c^-1) or E(c) at z as numerator and
         denominator, or None) times prod (sigma + B2) and prod (sigma - B2) over the step's windows (T6), each
         with the (b1, b2) its digit selects from its table.  Computed in an environment of its own: the
         inputs, z, z^2, zeta, the base."""
         fp, be = self.fp, self.be
         wins = self.prover.plan[s]
-        vals = [[Val(run[f'in{i}'], WORD_MAX) for i in self.ins], Val(run['z1'], KB), Val(run['z2'], KB), Val(run['zeta'], KB)]
-        if base[0] is not None:
-            vals.append([Val(run[nm], KB) for nm in base])
-        sel = lambda c, i, lo, width: self.cv.select_const(c['in'][self.ins.index(i)], lo, width, self.win_tables[(s, (i, lo, width))])
+        vals = [
+            [Val(run[f'in{i}'], WORD_MAX) for i in self.ins],
+            Val(run['z1'], KB),
+            Val(run['z2'], KB),
+            Val(run['zeta'], KB),
+        ]
+        g = [nm for nm in base if nm is not None]
+        if g:
+            vals.append([Val(run[nm], KB) for nm in g])
+        sel = lambda c, i, lo, width: self.cv.select_const(
+            c['in'][self.ins.index(i)], lo, width, self.win_tables[(s, (i, lo, width))]
+        )
 
         def t6(c, win):
             b = sel(c, *win)
             b = b if is_sym(be) else b[0]
             return be.call(self.T6, [b, [c['z'].e, c['z2'].e, c['zeta'].e, c['K'].e]])
 
-        def half(v, k): # sigma +- B2 of one window
+        def half(v, k):  # sigma +- B2 of one window
             return Val(be.sub(v.e, 'OI'[k], 256) if is_sym(be) else v.e[k], self.t6_hi[k])
 
         def body(acc):
@@ -922,10 +1085,12 @@ class PairingCheck:
                 gN, gD = (v if v.hi <= KB else fp.normalize(v) for v in (gN, gD))
                 ensure(gN.hi <= KB and gD.hi <= KB, 'window factor bound')
                 return fp.pack([gN, gD])
+
             return chain(fp, c, steps, final)
+
         return fp.scope(vals, body)
 
-    def loop(self, state0, leaves):
+    def loop(self, state0: Any, leaves: Any) -> Any:
         """The state after the 88 steps.  Sym: each step reads its leaf from a witness node of its own
         (LEAF_NAMES), so the leaves are not carried along: step k runs on (state, leaf k)."""
         be = self.be
@@ -935,39 +1100,45 @@ class PairingCheck:
             return state0
         shape = self.state_shape()
         state_w = sum(e.w for e in flat(shape))
-        e, bodies = state0, {}
+        e = state0
+        bodies: dict[tuple[str, bool], E] = {}
         for k, kind in enumerate(STEPS):
-            w = 256 * leaf_words(kind, COMMIT[k])
-            leaf = be.witness(LEAF_NAMES[k], leaf_type(kind, COMMIT[k]), w)
-            if k in self.prover.plan: # a step with windows: its own code
+            w = 256 * leaf_words(COMMIT[k])
+            leaf = be.witness(LEAF_NAMES[k], leaf_type(COMMIT[k]), w)
+            if k in self.prover.plan:  # a step with windows: its own code
                 be._push_env(state_w + w)
                 try:
                     body = self.step_value(k, be._unpack('O', shape), be.proj('IH', w))
                 finally:
                     be._pop_env()
                 e = be.comp(be.pair(e, leaf), body)
-            else: # the code of all steps of a kind, on ((state, leaf), the step's line constants)
+            else:  # the code of all steps of a kind, on ((state, leaf), the step's line constants)
                 key = (kind, COMMIT[k])
                 if key not in bodies:
                     be._push_env(state_w + w + 1024)
                     try:
-                        bodies[key] = be.share(self.step_value(k, be._unpack('OO', shape), be.proj('OIH', w), be.proj('IH', 1024)))
+                        bodies[key] = be.share(
+                            self.step_value(k, be._unpack('OO', shape), be.proj('OIH', w), be.proj('IH', 1024))
+                        )
                     finally:
                         be._pop_env()
                 e = be.comp(be.pair(be.pair(e, leaf), be.words_const(self.data[k])), bodies[key])
-            e = be.share(e) # one line of the program text per step
+            e = be.share(e)  # one line of the program text per step
         return e
 
     # before the loop
-    def setup(self, inputs, pts, ac, rz):
+    def setup(self, inputs: dict[str, Any], pts: Any, ac: Any, rz: Any) -> Term:
         """((N, D, acc, x, y), h, run) and the END values.  Checks A, B, C on their curves and the words of
         a_c, computes the run values, starts u = E(c^-1) as N / D = (a_c(z) - z) / (a_c(z) + z), and starts
         h with the public inputs, the points and a_c."""
         fp, be, cv = self.fp, self.be, self.cv
-        rd, one, m1, lc = self.rd, self.one, self.m1, fp.lin_const
+        rd, one, lc = self.rd, self.one, fp.lin_const
         z = lambda k: 'z' if k == 1 else f'z{k}'
         raw = lambda w: Val(w, WORD_MAX)
-        ctx = {'raw': [raw(rz[1]), raw(rz[0]), [raw(w) for w in flat(pts)]], 'ac': [[Val(w, F_HI) for w in g] for g in ac]}
+        ctx = {
+            'raw': [raw(rz[1]), raw(rz[0]), [raw(w) for w in flat(pts)]],
+            'ac': [[Val(w, F_HI) for w in g] for g in ac],
+        }
         if inputs['x']:
             ctx['in'] = [raw(x.e if isinstance(x, Val) else x) for x in inputs['x']]
 
@@ -982,43 +1153,89 @@ class PairingCheck:
             """conj(a) g at zeta: a0 (g0 + g1 zeta) + a1 (g1 - g0 zeta)"""
             return rd([(a0, lc([(one(), g.c0), (c['zeta'], g.c1)])), (a1, lc([(one(), g.c1), (c['zeta'], -g.c0)]))])
 
-        t_at = lambda n, c: lc([(c[z(k)], g) for k, g in poly.FROB_W[n]]) # t_n(z)
+        t_at = lambda n, c: lc([(c[z(k)], g) for k, g in poly.FROB_W[n]])  # t_n(z)
         sq = lambda a: lambda c: rd([(c[a], c[a])])
         mu = lambda a, b: lambda c: rd([(c[a], c[b])])
-        layers = [[('z2', sq('z'))], [('z3', mu('z2', 'z')), ('z4', sq('z2'))],
-                  [('z5', mu('z4', 'z')), ('z6', sq('z3')), ('z7', mu('z4', 'z3')), ('z8', sq('z4'))], [('z10', sq('z5'))]]
+        layer = lambda fs: lambda c: [f(c) for _, f in fs]  # the values of one layer
+        layers = [
+            [('z2', sq('z'))],
+            [('z3', mu('z2', 'z')), ('z4', sq('z2'))],
+            [('z5', mu('z4', 'z')), ('z6', sq('z3')), ('z7', mu('z4', 'z3')), ('z8', sq('z4'))],
+            [('z10', sq('z5'))],
+        ]
         # The first layer normalises the inputs into a fresh environment, which the on-curve checks then read;
         # every later layer pushes its values in front of it, so a_c and the points are not copied along.
         norm = lambda c: [fp.normalize(c['raw'][0]), fp.normalize(c['raw'][1]), [fp.normalize(v) for v in c['raw'][2]]]
-        on_curve = lambda c: [Val(e, 0) for e in (cv.g1_on_curve_check(c['p'][0], c['p'][1]), cv.g2_on_curve_check(
-            (c['p'][2], c['p'][3]), (c['p'][4], c['p'][5])), cv.g1_on_curve_check(c['p'][6], c['p'][7]))]
-        steps = [('let', ['z', 'r', 'p'], norm, ['raw']), ('check', on_curve)] + [
-            ('push', [n for n, _ in L], (lambda L: lambda c: [f(c) for _, f in L])(L)) for L in layers] + [
-            ('push', ['zeta', 'nz', 't1', 't2'], lambda c: [lc([(c['z6'], 1), (one(), -9)]), fp.mul_const(c['z'], -1), t_at(1, c), t_at(2, c)]),
-            ('push', ['acz', 'r2', 't3', 't1s', 't2s'], lambda c: [self.eval_at(c['ac'], c['z2']), rd([(c['r'], c['r'])]),
-                                                            fp.mul_const(c['t1'], poly.FROB_W[2][0][1]), # t3 = g t1
-                                                            rd([(c['t1'], c['t1'])]), rd([(c['t2'], c['t2'])])]),
-            ('push', ['xcz', 'XB', 'YB', 'r3', 'z3zeta', 't3s', 'A1', 'A2'], lambda c: [
-                rd([(c['p'][6], c['z'])]), rd([(c['p'][2], one()), (c['p'][3], c['zeta'])]),
-                rd([(c['p'][4], one()), (c['p'][5], c['zeta'])]), rd([(c['r2'], c['r'])]), rd([(c['z3'], c['zeta'])]),
-                rd([(c['t3'], c['t3'])]), self.eval_at(c['ac'], c['t1s']), self.eval_at(c['ac'], c['t2s'])])]
-        end_hi = []
+        on_curve = lambda c: [
+            Val(e, 0)
+            for e in (
+                cv.g1_on_curve_check(c['p'][0], c['p'][1]),
+                cv.g2_on_curve_check((c['p'][2], c['p'][3]), (c['p'][4], c['p'][5])),
+                cv.g1_on_curve_check(c['p'][6], c['p'][7]),
+            )
+        ]
+        steps = (
+            [('let', ['z', 'r', 'p'], norm, ['raw']), ('check', on_curve)]
+            + [('push', [n for n, _ in L], layer(L)) for L in layers]
+            + [
+                (
+                    'push',
+                    ['zeta', 'nz', 't1', 't2'],
+                    lambda c: [lc([(c['z6'], 1), (one(), -9)]), fp.mul_const(c['z'], -1), t_at(1, c), t_at(2, c)],
+                ),
+                (
+                    'push',
+                    ['acz', 'r2', 't3', 't1s', 't2s'],
+                    lambda c: [
+                        self.eval_at(c['ac'], c['z2']),
+                        rd([(c['r'], c['r'])]),
+                        fp.mul_const(c['t1'], poly.FROB_W[2][0][1]),  # t3 = g t1
+                        rd([(c['t1'], c['t1'])]),
+                        rd([(c['t2'], c['t2'])]),
+                    ],
+                ),
+                (
+                    'push',
+                    ['xcz', 'XB', 'YB', 'r3', 'z3zeta', 't3s', 'A1', 'A2'],
+                    lambda c: [
+                        rd([(c['p'][6], c['z'])]),
+                        rd([(c['p'][2], one()), (c['p'][3], c['zeta'])]),
+                        rd([(c['p'][4], one()), (c['p'][5], c['zeta'])]),
+                        rd([(c['r2'], c['r'])]),
+                        rd([(c['z3'], c['zeta'])]),
+                        rd([(c['t3'], c['t3'])]),
+                        self.eval_at(c['ac'], c['t1s']),
+                        self.eval_at(c['ac'], c['t2s']),
+                    ],
+                ),
+            ]
+        )
+        end_hi: list[int] = []
 
         def final(c, checks):
-            g1, g2 = bn254.FROB1, bn254.FROB2
-            vals = {nm: c[z(int(nm[1:]))] for nm in self.run if nm[0] == 'z' and nm[1:].isdigit()} # the powers of z
+            g1 = bn254.FROB1
+            vals = {nm: c[z(int(nm[1:]))] for nm in self.run if nm[0] == 'z' and nm[1:].isdigit()}  # the powers of z
             vals.update({nm: c[nm] for nm in ('zeta', 'z3zeta', 'xcz', 'r', 'r2', 'r3', 'XB', 'YB')})
             vals.update({f'in{i}': c['in'][i] for i in self.ins})
-            vals.update(nxpz=rd([(c['p'][0], c['nz'])]), yp=c['p'][1], xczz=rd([(c['xcz'], c['zeta'])]), yc=c['p'][7],
-                        X1=at_zeta_conj(c, c['p'][2], c['p'][3], g1[2]), Y1=at_zeta_conj(c, c['p'][4], c['p'][5], g1[3]),
-                        cp=fp.add(c['acz'], c['z']), cm=fp.sub(c['acz'], c['z'])) # E(c) = cp / cm at z
+            vals.update(
+                nxpz=rd([(c['p'][0], c['nz'])]),
+                yp=c['p'][1],
+                xczz=rd([(c['xcz'], c['zeta'])]),
+                yc=c['p'][7],
+                X1=at_zeta_conj(c, c['p'][2], c['p'][3], g1[2]),
+                Y1=at_zeta_conj(c, c['p'][4], c['p'][5], g1[3]),
+                cp=fp.add(c['acz'], c['z']),
+                cm=fp.sub(c['acz'], c['z']),
+            )  # E(c) = cp / cm at z
             run = []
             for nm in self.run:
-                v = vals[nm] if vals[nm].hi <= KB or nm.startswith('in') else fp.normalize(vals[nm]) # inputs stay words
+                v = (
+                    vals[nm] if vals[nm].hi <= KB or nm.startswith('in') else fp.normalize(vals[nm])
+                )  # inputs stay words
                 ensure(v.hi <= KB or nm.startswith('in'), f'run value bound: {nm}')
                 run.append(v)
             rv = dict(zip(self.run, run))
-            start = [rv['cm'], rv['cp'], fp.const(0), rv['XB'], rv['YB']] # u = E(c^-1) = cm / cp
+            start = [rv['cm'], rv['cp'], fp.const(0), rv['XB'], rv['YB']]  # u = E(c^-1) = cm / cp
             for nm, v in zip(('N', 'D', 'acc', 'x', 'y'), start):
                 ensure(v.hi <= self.b[nm], f'initial bound: {nm}')
             # the last relation N pn - D pd: pi(c'^-1) pi^2(c') pi^3(c'^-1) / tau, numerator and denominator
@@ -1034,54 +1251,80 @@ class PairingCheck:
             n_any, n_step = len(RUN_ANY), len(RUN_STEP)
             run = [[run[:n_any], run[n_any:n_step]], run[n_step:]]
             return be.seq(be.checks([ch.e for ch in checks]), be.pack([fp.pack([start, run]), fp.pack(end)]))
+
         out = chain(fp, ctx, steps, final)
         self.end_hi = end_hi
         h = self.sha_add(self.sha_init(), list(inputs['words']) + [pts])
         h = self.sha_add(h, [ac[0], ac[1]])
         return be.seq(self.top2_6(ac), self._with_h(out, h))
 
-    def _with_h(self, out, h):
+    def _with_h(self, out: Any, h: Any) -> Any:
         """((start, run), end) and h -> ((start, h, run), end)"""
         be = self.be
         if not is_sym(be):
             (start, run), end = out
             return [[[start, h], run], end]
-        shape = [[[words(N_STATE), [self.run_shape(), words(len(self.run_rest))]], words(len(END))], E('', SHA_CTX_W, 0)]
-        return be.with_env(be.pair(out, h), shape, lambda a: be.pack(
-            [[[be.subtree(a[0][0][0]), a[1]], be.subtree(a[0][0][1])], be.subtree(a[0][1])]))
+        shape = [
+            [[words(N_STATE), [self.run_shape(), words(len(self.run_rest))]], words(len(END))],
+            E('', SHA_CTX_W, 0),
+        ]
+        return be.with_env(
+            be.pair(out, h),
+            shape,
+            lambda a: be.pack([[[be.subtree(a[0][0][0]), a[1]], be.subtree(a[0][0][1])], be.subtree(a[0][1])]),
+        )
 
     # after the loop
-    def final(self, state, end, q, rz):
+    def final(self, state: Any, end: Any, q: Any, rz: Any) -> Term:
         """The last three relations, S(z) = Q(z) M(z), and r, z against the two hashes."""
         fp, be, cv = self.fp, self.be, self.cv
-        rd, one, m1 = self.rd, self.one, self.m1
+        rd, one = self.rd, self.one
         ((N, D, acc, x, y), h), run = state
         run = {nm: Val(w, KB) for nm, w in zip(self.run, flat(run))}
         run.update({nm: Val(w, KB) for nm, w in zip(END, end) if nm in ('z5', 'z7')})
         b = self.b
         chunks = [half for blk in q for half in ([blk] if len(blk) == 8 else [blk[:8], blk[8:]])]
-        ensure(len(blocks(self.prover.n_q)) == len(q) and all(len(ch) == 8 for ch in chunks), 'Q is read in chunks of 8 words')
+        ensure(
+            len(blocks(self.prover.n_q)) == len(q) and all(len(ch) == 8 for ch in chunks),
+            'Q is read in chunks of 8 words',
+        )
         qz = be.word(0)
         for ch in reversed(chunks):
             zs = [run[f'z{k}'].e for k in range(1, 8)]
             qz = be.call(self.QCHUNK, [[[qz, run['z8'].e], zs], be.subtree(ch) if is_sym(be) else ch])
-        c = {'N': Val(N, b['N']), 'D': Val(D, b['D']), 'acc': Val(acc, b['acc']), 'x': Val(x, b['x']), 'y': Val(y, b['y']),
-             'qz': Val(qz, b['qz'])}
+        c = {
+            'N': Val(N, b['N']),
+            'D': Val(D, b['D']),
+            'acc': Val(acc, b['acc']),
+            'x': Val(x, b['x']),
+            'y': Val(y, b['y']),
+            'qz': Val(qz, b['qz']),
+        }
         c.update({nm: Val(w, hi) for nm, w, hi in zip(END, end, self.end_hi)})
         c.update({nm: run[nm] for nm in ('r', 'r2', 'z6', 'X1', 'Y1')})
 
         def horner_end(c):
             # -psi^3(B) = psi^2(psi(B)) negated, and psi^2 (x, y) = (omega x, -y): its point at zeta is (omega X1, Y1)
             X3 = fp.mul_const(c['X1'], bn254.FROB2[2].c0)
-            g2 = rd([(c['x'], c['r2']), (X3, fp.mul_const(c['r2'], -1)), (c['y'], c['r']), (c['Y1'], fp.mul_const(c['r'], -1))])
+            g2 = rd(
+                [
+                    (c['x'], c['r2']),
+                    (X3, fp.mul_const(c['r2'], -1)),
+                    (c['y'], c['r']),
+                    (c['Y1'], fp.mul_const(c['r'], -1)),
+                ]
+            )
             return rd([(c['acc'], c['r3']), (g2, one()), (c['N'], c['pn']), (c['D'], c['npd'])])
 
-        steps = [('let', ['s', 'z12'], lambda c: [horner_end(c), rd([(c['z6'], c['z6'])])]),
-                 ('drop', ['acc', 'x', 'y', 'N', 'D', 'r', 'r2', 'r3', 'X1', 'Y1'] + END)]
+        steps = [
+            ('let', ['s', 'z12'], lambda c: [horner_end(c), rd([(c['z6'], c['z6'])])]),
+            ('drop', ['acc', 'x', 'y', 'N', 'D', 'r', 'r2', 'r3', 'X1', 'Y1'] + END),
+        ]
 
         def check(c, _):
             minus_m = fp.lin_const([(c['z12'], -1), (c['z6'], 18), (one(), -82)])
             return cv.zero_check(rd([(c['s'], one()), (c['qz'], minus_m)])).e
+
         identity = chain(fp, c, steps, check)
         r_hash = self.sha_final(h)
         z_hash = self.sha_final(self.sha_add(self.sha_add(self.sha_init(), [rz[0]]), list(q)))
@@ -1090,7 +1333,7 @@ class PairingCheck:
             return 0
         return be.checks([identity, be.verify(be.eq256(r_hash, rz[0])), be.verify(be.eq256(z_hash, rz[1]))])
 
-    def program(self, inputs, pts, ac, rz, leaves=None, q=None):
+    def program(self, inputs: dict[str, Any], pts: Any, ac: Any, rz: Any, leaves: Any = None, q: Any = None) -> Term:
         """The whole check.  inputs: {'x': the public inputs (accessors or Vals), 'words': their words for the
         transcript}; pts, ac, rz as in witness_shape().  Sym: a unit-typed E over the environment, which
         reads the leaves and Q from witness nodes of their own (witness_nodes); Num: runs the checks, on
@@ -1102,25 +1345,29 @@ class PairingCheck:
             return self.final(self.loop(st0, leaves), end, q, rz)
         n_q = self.prover.n_q
         qshape = [words(k) for k in blocks(n_q)]
-        parts = {}
+        parts: dict[str, int] = {}
 
         def body(a):
             (st0, end), rza = a
             st = self.loop(be.subtree(st0), None)
             qa = be.witness(Q_NAME, q_type(n_q), 256 * n_q)
-            out = be.with_env(be.pack([st, be.subtree(end), qa, be.subtree(rza)]),
-                              [self.state_shape(), words(len(END)), qshape, words(2)], lambda a: self.final(*a))
+            out = be.with_env(
+                be.pack([st, be.subtree(end), qa, be.subtree(rza)]),
+                [self.state_shape(), words(len(END)), qshape, words(2)],
+                lambda a: self.final(*a),
+            )
             parts.update(loop=st.c, final=out.c - st.c)
             return out
+
         out = be.with_env(be.pack([s0, be.subtree(rz)]), [[self.state_shape(), words(len(END))], words(2)], body)
         self.parts = {'setup': s0.c, **parts}
         return out
 
 
-_BOUNDS = None
+_BOUNDS: dict[str, int] | None = None
 
 
-def bounds():
+def bounds() -> dict[str, int]:
     """The bounds of the loop state (they depend on the structure only), computed once."""
     global _BOUNDS
     if _BOUNDS is None:
@@ -1138,65 +1385,61 @@ LEAF_NAMES = [f'wl{k}' for k in range(N_STEPS)]
 Q_NAME = 'wq'
 
 
-def leaf_shape(kind, commit):
+def leaf_shape(commit: bool) -> Shape:
     """(lambda, a): a (4 + 2 words) if committed."""
     return [words(2)] + ([[words(4), words(2)]] if commit else [])
 
 
-def _T(n):
+def _T(n: int) -> str:
     return Tbalanced(['2^256'] * n)
 
 
-def leaf_type(kind, commit):
+def leaf_type(commit: bool) -> str:
     return Tbalanced([_T(2)] + ([f'({_T(4)} * {_T(2)})'] if commit else []))
 
 
-def q_type(n_q):
+def q_type(n_q: int) -> str:
     return Tbalanced([_T(k) for k in blocks(n_q)])
 
 
-def witness_shape(n=1):
-    """The part of the program's witness (any number of public inputs)."""
+def witness_shape() -> Shape:
+    """The check's part of w_in: ((points, a_c), (r, z)), for any number of public inputs."""
     return [[words(8), [words(4), words(2)]], words(2)]
 
 
-def witness_type(n=1):
+def witness_type() -> str:
     return f'(({_T(8)} * ({_T(4)} * {_T(2)})) * {_T(2)})'
 
 
-def witness_bits(n=1):
+def witness_bits() -> int:
     return 256 * (8 + 6 + 2)
 
 
-def witness_node_bits(n=1):
-    """The bits of the witness nodes of their own: the leaves and Q (whose size depends on n)."""
-    return 256 * (q_words(window_plan(n)[0]) + sum(leaf_words(kind, COMMIT[k]) for k, kind in enumerate(STEPS)))
-
-
-def _split(w):
+def _split(w: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
     def leaf(k, lf):
         return [lf[:2]] + ([[lf[2:6], lf[6:8]]] if COMMIT[k] else [])
+
     qs, i = [], 0
     for k in blocks(len(w['q'])):
-        qs.append(w['q'][i:i + k])
+        qs.append(w['q'][i : i + k])
         i += k
     return w['points'], [w['ac'][:4], w['ac'][4:]], [leaf(k, lf) for k, lf in enumerate(w['leaves'])], qs
 
 
-def witness_num(w):
+def witness_num(w: dict[str, Any]) -> list[Any]:
     """The witness as the nested value the numeric backend takes: ((points, a_c), ((r, z), (leaves, Q)))."""
     pts, ac, leaves, qs = _split(w)
     return [[pts, ac], [[w['r'], w['z']], [leaves, qs]]]
 
 
-def witness_value(w):
+def witness_value(w: dict[str, Any]) -> WSpec:
     """The part of the program's witness as a harness value spec (tools/harness)."""
     pts, ac, _, _ = _split(w)
     W = lambda ws: wbalanced([wv(256, x) for x in ws])
     return wpair(wpair(W(pts), wpair(W(ac[0]), W(ac[1]))), W([w['r'], w['z']]))
 
 
-def witness_nodes(w):
+def witness_nodes(w: dict[str, Any]) -> dict[str, WSpec]:
     """The values of the witness nodes of their own, by name."""
     _, _, leaves, qs = _split(w)
     W = lambda ws: wbalanced([wv(256, x) for x in ws])

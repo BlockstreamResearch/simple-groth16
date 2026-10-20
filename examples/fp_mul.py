@@ -4,13 +4,18 @@ the expected product.
 
     python3 examples/fp_mul.py > examples/fp_mul.simpl
 """
-import json, os, sys
+
+import json
+import os
+import sys
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
 from groth import fp as F
 from groth.sym import Sym
 
-w = json.load(open(os.path.join(HERE, 'fp_mul.w0.json')))['w_in']['p']
+with open(os.path.join(HERE, 'fp_mul.w0.json')) as f:
+    w = json.load(f)['w_in']['p']
 a, b = (int(x['w'], 16) for x in w)
 be = Sym(512)
 fp = F.Fp(be)

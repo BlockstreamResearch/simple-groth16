@@ -57,7 +57,7 @@ The generator is a Python library, `groth/`, that writes the program as text in 
 1. **One description, two backends.** Each building block (a field product, an on-curve check, a step of the Miller loop) is written once against a small backend interface. The `Sym` backend (`sym.py`) turns the calls into Simplicity expressions and computes their exact cost. The `Num` backend runs the same calls on Python integers. The tests run both and check that the program computes exactly the model's numbers and costs exactly what the generator predicted.
 2. **Explicit environments.** Values are bound with `let`, which adds them to the environment, or `scope`, which replaces the environment with just those values. A value read in one place only is a witness node of its own, read where it is used: each of the 88 steps of the loop reads its leaf (B's slope, and a committed value) from its own node, and the end reads Q from one, so they are never carried through the environment.
 3. **Static bounds.** Every field value carries an upper bound. Each operation computes the bound of its result and checks it against the limit of the arithmetic. When a sum would overflow, its operands are normalised first; if a bound still cannot be met, the build stops with an error.
-4. **Shared functions.** Repeated parts, such as a step of the Miller loop, are defined once as named functions and called with their data. This does not reduce cost, since every call executes, but it keeps the program at about 60 kB.
+4. **Shared functions.** Repeated parts, such as a step of the Miller loop, are defined once as named functions and called with their data. This does not reduce cost, since every call executes, but it keeps the pruned program at 34 kB.
 
 | module | what it builds |
 |---|---|
@@ -65,9 +65,9 @@ The generator is a Python library, `groth/`, that writes the program as text in 
 | `sym.py` | the two backends and the cost model |
 | `fp.py` | BN254 field arithmetic |
 | `poly.py` | F_p12 as polynomials modulo w^12 - 18w^6 + 82 |
-| `curve.py` | on-curve checks, the multi-scalar multiplication |
+| `curve.py` | on-curve checks, constant tables selected by the bits of a word, the range check of an input |
 | `pairing.py` | the pairing check as one polynomial identity |
-| `groth16.py` | the whole verifier, transaction binding, padding |
+| `groth16.py` | the whole verifier and the transaction binding |
 | `merkle.py` | the public-signal convention |
 | `bn254.py` | the plain-Python reference everything is tested against |
 
@@ -174,7 +174,7 @@ The factors have order r, so they lie in the cyclotomic subgroup T6 of order p^4
 
 The factors join the additions: an addition multiplies N and D by g_N and g_D already, and its windows' factors multiply them further, which raises that relation's degree by 17 or 8 per factor. The generator gives each addition as many windows as its relation has room for under the degree cap, the additions with the most room first: 7 additions, with 3 to 7 windows each, for one input. A factor multiplied in before k more doublings is squared k times by the loop, so its table holds the 2^k-th root of the factor, which exists in a group of odd order. The six top bits of the first input select the end's constant instead: τ is a table of 64 that also absorbs e(IC_0, γ), the offsets and (α, β).
 
-For one input, this replaces the MSM in G1 (5.3 M mWU, 32 slopes in the witness) and γ's line constants (11.3 kB, and a line per step) with 31 table factors of 4 words. Each further input adds 32 windows with entries of 4 words where G1 needed 2, and more room in the relations, so with more than about five inputs the MSM in G1 would be lighter; the transaction-bound circuits have one.
+For one input, this replaces the MSM in G1 (5.3 M mWU, 32 slopes in the witness) and γ's line constants (11.3 kB, and a line per step) with 31 table factors of 4 words. Each further input adds 32 windows with entries of 4 words where G1 needed 2, and more room in the relations, so with more than about five inputs the MSM in G1 would be lighter; the transaction-bound circuits have one. Each input adds about 6 M mWU and 14 kB to the pruned program (61.4 M mWU and 62 kB with three). With three or more, some additions carry ten or more windows, and the product of their factors is normalised partway, so that it stays within the bound of the field arithmetic. The program text grows by 2.6 MB per input, and its parse time with it: about 25 minutes for three inputs.
 
 ### One identity, checked at one point
 
@@ -212,11 +212,9 @@ The public inputs enter through the inputs' term of the pairing check (above): t
 
 To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, merkle.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 15 k mWU and the circuit about 59 k constraints per hashed node.
 
-## Budget and padding (groth16.py)
+## Budget
 
-The program costs 48.6 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 34 kB program and the 18 kB witness already earn about 52.7 M mWU, and no padding is needed: the transaction weighs about 53 kWU.
-
-Programs that cost more than their bytes earn can still be padded. Elements does not relay transactions with an annex, the field rust-simplicity would use for padding, so the blocks of 512 zero bytes go into the Simplicity witness. A witness value the program never reads would get the wrong type, so each block is hashed into a throwaway SHA-256 context, which costs 25.5 k mWU per block. `Groth16.padding` sizes the padding from the program's cost, and `deploy spend` reports whether the budget is covered.
+The program costs 48.6 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 34 kB program and the 18 kB witness already earn about 52.7 M mWU: the verifier needs no padding, and the transaction weighs about 53 kWU. More public inputs keep it that way, since each one adds more bytes (its tables, about 14 kB) than cost (about 6.6 M mWU). `tests/test_groth16.py` checks that the budget covers the cost, and `deploy spend` reports it for a real transaction.
 
 ## Spending (tools/harness)
 

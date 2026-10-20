@@ -11,12 +11,19 @@ the slope relations need no inverse of xQ - x.
 
     python3 tests/test_g2_check.py
 """
-import math, os, random, sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B, poly, pairing as PC
-from test_pairing import program, witness
-import harness
 
+import math
+import os
+import random
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import harness
+from test_pairing import program, witness
+
+from groth import bn254 as B
+from groth import pairing as PC
+from groth import poly
 
 COFACTOR_PRIMES = [10069, 5864401, 1875725156269, 197620364512881247228717050342013327560683201906968909]
 
@@ -27,8 +34,11 @@ def check_kernel(rng):
     psi, mul = B.g2_frobenius, B.g2_mul_unreduced
 
     def phi(Q):
-        Q1 = psi(Q); Q2 = psi(Q1); Q3 = psi(Q2)
+        Q1 = psi(Q)
+        Q2 = psi(Q1)
+        Q3 = psi(Q2)
         return B.g2_add(B.g2_add(B.g2_add(mul(Q, 6 * B.X + 2), Q1), B.g2_neg(Q2)), Q3)
+
     h = 2 * B.P - B.R
     assert h == math.prod(COFACTOR_PRIMES)
     assert phi(B.G2_GEN) is None
@@ -105,12 +115,15 @@ def main():
     unit = PC.Prover(delta, B.Fp12.one(), gt)
     h = 2 * B.P - B.R
     good = B.g2_mul(B.G2_GEN, rng.randrange(1, B.R))
-    small = B.g2_mul_unreduced(B.g2_random_point(rng), B.R * h // 10069) # order 10069
-    cases = [('B in G2', good, True), ('B + order-10069 point', B.g2_add(good, small), False),
-             ('random twist point', B.g2_random_point(rng), False)]
+    small = B.g2_mul_unreduced(B.g2_random_point(rng), B.R * h // 10069)  # order 10069
+    cases = [
+        ('B in G2', good, True),
+        ('B + order-10069 point', B.g2_add(good, small), False),
+        ('random twist point', B.g2_random_point(rng), False),
+    ]
     b = PC.bounds()
-    c = B.Fp12(B.Fp6(B.Fp2(3, 1)), B.Fp6(B.Fp2(5, 2))) # any element outside F_p6
-    c_lam = c ** B.LAMBDA
+    c = B.Fp12(B.Fp6(B.Fp2(3, 1)), B.Fp6(B.Fp2(5, 2)))  # any element outside F_p6
+    c_lam = c**B.LAMBDA
     for label, Bq, in_g2 in cases:
         assert B.g2_on_curve(*Bq) and B.g2_in_subgroup(Bq) == in_g2
         pairs = [(A, Bq), (C, delta)]

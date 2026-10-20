@@ -31,13 +31,16 @@ struct Report {
 fn run(forest: &Forest, witness: &HashMap<Arc<str>, simplicity::Value>) -> Result<Report, (&'static str, String)> {
     let dummy = env::dummy();
     simplicity::types::Context::with_context(|ctx| {
-        let node = forest.to_witness_node(&ctx, witness).ok_or(("parse", "no main".to_string()))?;
+        let node = forest
+            .to_witness_node(&ctx, witness)
+            .ok_or(("parse", "no main".to_string()))?;
         let program = node.finalize_pruned(&dummy).map_err(|e| ("finalize", e.to_string()))?;
         let mut mac = BitMachine::for_program(&program).map_err(|e| ("machine", e.to_string()))?;
         mac.exec(&program, &dummy).map_err(|e| ("exec", e.to_string()))?;
         let (p, w) = program.to_vec_with_witness();
-        let decoded = RedeemNode::decode::<_, _, Elements>(BitIter::from(p.iter().cloned()), BitIter::from(w.iter().cloned()))
-            .map_err(|e| ("decode", e.to_string()))?;
+        let decoded =
+            RedeemNode::decode::<_, _, Elements>(BitIter::from(p.iter().cloned()), BitIter::from(w.iter().cloned()))
+                .map_err(|e| ("decode", e.to_string()))?;
         assert_eq!(decoded.cmr(), program.cmr(), "CMR changed by the round trip");
         let mut mac = BitMachine::for_program(&decoded).map_err(|e| ("machine", e.to_string()))?;
         mac.exec(&decoded, &dummy).map_err(|e| ("exec2", e.to_string()))?;

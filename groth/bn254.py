@@ -13,20 +13,26 @@ h = 10069 * 5864401 * 1875725156269 * q (q a 177-bit prime), so E'(Fp2) has poin
 are not in G2.
 """
 
+from __future__ import annotations
+
+import random
+from collections.abc import Sequence
+from typing import Any, overload
+
 X = 4965661367192848881
 P = 36 * X**4 + 36 * X**3 + 24 * X**2 + 6 * X + 1
 R = 36 * X**4 + 36 * X**3 + 18 * X**2 + 6 * X + 1
 assert P == 21888242871839275222246405745257275088696311157297823662689037894645226208583
 assert R == 21888242871839275222246405745257275088548364400416034343698204186575808495617
-ATE_LOOP = 6 * X + 2 # 29793968203157093288
+ATE_LOOP = 6 * X + 2  # 29793968203157093288
 
 
-def naf(n):
+def naf(n: int) -> list[int]:
     """Non-adjacent form, least significant digit first."""
     out = []
     while n:
         if n & 1:
-            d = 2 - (n & 3) # 1 or -1
+            d = 2 - (n & 3)  # 1 or -1
             n -= d
         else:
             d = 0
@@ -35,94 +41,120 @@ def naf(n):
     return out
 
 
-ATE_NAF = naf(ATE_LOOP) # digits, LSB first
+ATE_NAF = naf(ATE_LOOP)  # digits, LSB first
 
 
 # Fp2
 class Fp2:
     __slots__ = ('c0', 'c1')
 
-    def __init__(self, c0, c1=0):
+    def __init__(self, c0: int, c1: int = 0) -> None:
         self.c0 = c0 % P
         self.c1 = c1 % P
 
-    def __eq__(self, o):
+    def __eq__(self, o: object) -> bool:
+        if not isinstance(o, (Fp2, int)):
+            return NotImplemented
         o = _fp2(o)
         return self.c0 == o.c0 and self.c1 == o.c1
 
-    def __hash__(self): return hash((self.c0, self.c1))
-    def __repr__(self): return f'Fp2({self.c0}, {self.c1})'
+    def __hash__(self) -> int:
+        return hash((self.c0, self.c1))
 
-    def __add__(self, o): o = _fp2(o); return Fp2(self.c0 + o.c0, self.c1 + o.c1)
-    def __sub__(self, o): o = _fp2(o); return Fp2(self.c0 - o.c0, self.c1 - o.c1)
-    def __neg__(self): return Fp2(-self.c0, -self.c1)
+    def __repr__(self) -> str:
+        return f'Fp2({self.c0}, {self.c1})'
+
+    def __add__(self, o: Fp2 | int) -> Fp2:
+        o = _fp2(o)
+        return Fp2(self.c0 + o.c0, self.c1 + o.c1)
+
+    def __sub__(self, o: Fp2 | int) -> Fp2:
+        o = _fp2(o)
+        return Fp2(self.c0 - o.c0, self.c1 - o.c1)
+
+    def __neg__(self) -> Fp2:
+        return Fp2(-self.c0, -self.c1)
+
     __radd__ = __add__
 
-    def __mul__(self, o):
+    def __mul__(self, o: Fp2 | int) -> Fp2:
         if isinstance(o, int):
             return Fp2(self.c0 * o, self.c1 * o)
         o = _fp2(o)
         return Fp2(self.c0 * o.c0 - self.c1 * o.c1, self.c0 * o.c1 + self.c1 * o.c0)
+
     __rmul__ = __mul__
 
-    def square(self):
+    def square(self) -> Fp2:
         return Fp2((self.c0 + self.c1) * (self.c0 - self.c1), 2 * self.c0 * self.c1)
 
-    def conj(self): return Fp2(self.c0, -self.c1)
+    def conj(self) -> Fp2:
+        return Fp2(self.c0, -self.c1)
 
-    def mul_by_xi(self):
+    def mul_by_xi(self) -> Fp2:
         """Multiply by xi = 9 + u."""
         return Fp2(9 * self.c0 - self.c1, self.c0 + 9 * self.c1)
 
-    def inv(self):
+    def inv(self) -> Fp2:
         t = pow(self.c0 * self.c0 + self.c1 * self.c1, P - 2, P)
         return Fp2(self.c0 * t, -self.c1 * t)
 
-    def __pow__(self, e):
+    def __pow__(self, e: int) -> Fp2:
         r, b = Fp2(1), self
         while e:
-            if e & 1: r = r * b
+            if e & 1:
+                r = r * b
             b = b.square()
             e >>= 1
         return r
 
-    def is_zero(self): return self.c0 == 0 and self.c1 == 0
+    def is_zero(self) -> bool:
+        return self.c0 == 0 and self.c1 == 0
 
-    def sqrt(self):
+    def sqrt(self) -> Fp2 | None:
         """A square root, or None (p = 3 mod 4: Adj and Rodriguez-Henriquez, algorithm 9)."""
         a1 = self ** ((P - 3) // 4)
         alpha = a1 * a1 * self
-        if (alpha ** P) * alpha == Fp2(-1):
+        if (alpha**P) * alpha == Fp2(-1):
             return None
         x0 = a1 * self
         x = Fp2(0, 1) * x0 if alpha == Fp2(-1) else (Fp2(1) + alpha) ** ((P - 1) // 2) * x0
         return x if x.square() == self else None
 
 
-def _fp2(o):
+def _fp2(o: Fp2 | int) -> Fp2:
     return o if isinstance(o, Fp2) else Fp2(o)
 
 
 XI = Fp2(9, 1)
-TWIST_B = XI.inv() * 3 # b' = 3 / xi
+TWIST_B = XI.inv() * 3  # b' = 3 / xi
 
 
 # Fp6 = Fp2[v]/(v^3 - xi)
 class Fp6:
     __slots__ = ('c0', 'c1', 'c2')
 
-    def __init__(self, c0, c1=None, c2=None):
+    def __init__(self, c0: Fp2 | int, c1: Fp2 | int | None = None, c2: Fp2 | int | None = None) -> None:
         self.c0 = _fp2(c0)
         self.c1 = Fp2(0) if c1 is None else _fp2(c1)
         self.c2 = Fp2(0) if c2 is None else _fp2(c2)
 
-    def __eq__(self, o): return self.c0 == o.c0 and self.c1 == o.c1 and self.c2 == o.c2
-    def __repr__(self): return f'Fp6({self.c0}, {self.c1}, {self.c2})'
-    def __add__(self, o): return Fp6(self.c0 + o.c0, self.c1 + o.c1, self.c2 + o.c2)
-    def __sub__(self, o): return Fp6(self.c0 - o.c0, self.c1 - o.c1, self.c2 - o.c2)
-    def __neg__(self): return Fp6(-self.c0, -self.c1, -self.c2)
+    def __eq__(self, o: object) -> bool:
+        return isinstance(o, Fp6) and self.c0 == o.c0 and self.c1 == o.c1 and self.c2 == o.c2
 
-    def __mul__(self, o):
+    def __repr__(self) -> str:
+        return f'Fp6({self.c0}, {self.c1}, {self.c2})'
+
+    def __add__(self, o: Fp6) -> Fp6:
+        return Fp6(self.c0 + o.c0, self.c1 + o.c1, self.c2 + o.c2)
+
+    def __sub__(self, o: Fp6) -> Fp6:
+        return Fp6(self.c0 - o.c0, self.c1 - o.c1, self.c2 - o.c2)
+
+    def __neg__(self) -> Fp6:
+        return Fp6(-self.c0, -self.c1, -self.c2)
+
+    def __mul__(self, o: Fp6 | Fp2) -> Fp6:
         if isinstance(o, Fp2):
             return Fp6(self.c0 * o, self.c1 * o, self.c2 * o)
         a0, a1, a2 = self.c0, self.c1, self.c2
@@ -133,7 +165,7 @@ class Fp6:
         c2 = (a0 + a2) * (b0 + b2) - t0 - t2 + t1
         return Fp6(c0, c1, c2)
 
-    def square(self):
+    def square(self) -> Fp6:
         a0, a1, a2 = self.c0, self.c1, self.c2
         s0 = a0.square()
         ab = a0 * a1
@@ -144,11 +176,11 @@ class Fp6:
         s4 = a2.square()
         return Fp6(s0 + s3.mul_by_xi(), s1 + s4.mul_by_xi(), s1 + s2 + s3 - s0 - s4)
 
-    def mul_by_v(self):
+    def mul_by_v(self) -> Fp6:
         """Multiply by v: (c0, c1, c2) -> (xi c2, c0, c1)."""
         return Fp6(self.c2.mul_by_xi(), self.c0, self.c1)
 
-    def inv(self):
+    def inv(self) -> Fp6:
         a0, a1, a2 = self.c0, self.c1, self.c2
         t0 = a0.square() - (a1 * a2).mul_by_xi()
         t1 = a2.square().mul_by_xi() - a0 * a1
@@ -156,14 +188,15 @@ class Fp6:
         d = (a0 * t0 + (a2 * t1 + a1 * t2).mul_by_xi()).inv()
         return Fp6(t0 * d, t1 * d, t2 * d)
 
-    def is_zero(self): return self.c0.is_zero() and self.c1.is_zero() and self.c2.is_zero()
+    def is_zero(self) -> bool:
+        return self.c0.is_zero() and self.c1.is_zero() and self.c2.is_zero()
 
 
 # Fp12 = Fp6[w]/(w^2 - v)
 # Frobenius constants gamma_{1,i} = xi^{i (p-1)/6}
 FROB1 = [XI ** (i * (P - 1) // 6) for i in range(6)]
-FROB2 = [FROB1[i] * FROB1[i].conj() for i in range(6)] # xi^{i (p^2-1)/6} = gamma1_i * conj(gamma1_i)
-FROB3 = [FROB2[i] * FROB1[i] for i in range(6)] # xi^{i (p^3-1)/6}
+FROB2 = [FROB1[i] * FROB1[i].conj() for i in range(6)]  # xi^{i (p^2-1)/6} = gamma1_i * conj(gamma1_i)
+FROB3 = [FROB2[i] * FROB1[i] for i in range(6)]  # xi^{i (p^3-1)/6}
 for i in range(6):
     assert FROB2[i].c1 == 0
 
@@ -171,36 +204,45 @@ for i in range(6):
 class Fp12:
     __slots__ = ('c0', 'c1')
 
-    def __init__(self, c0, c1=None):
+    def __init__(self, c0: Fp6 | Fp2 | int, c1: Fp6 | None = None) -> None:
         self.c0 = c0 if isinstance(c0, Fp6) else Fp6(c0)
         self.c1 = Fp6(0) if c1 is None else c1
 
     @staticmethod
-    def one(): return Fp12(Fp6(1))
+    def one() -> Fp12:
+        return Fp12(Fp6(1))
 
-    def __eq__(self, o): return self.c0 == o.c0 and self.c1 == o.c1
-    def __repr__(self): return f'Fp12({self.c0}, {self.c1})'
-    def __add__(self, o): return Fp12(self.c0 + o.c0, self.c1 + o.c1)
-    def __sub__(self, o): return Fp12(self.c0 - o.c0, self.c1 - o.c1)
+    def __eq__(self, o: object) -> bool:
+        return isinstance(o, Fp12) and self.c0 == o.c0 and self.c1 == o.c1
 
-    def __mul__(self, o):
+    def __repr__(self) -> str:
+        return f'Fp12({self.c0}, {self.c1})'
+
+    def __add__(self, o: Fp12) -> Fp12:
+        return Fp12(self.c0 + o.c0, self.c1 + o.c1)
+
+    def __sub__(self, o: Fp12) -> Fp12:
+        return Fp12(self.c0 - o.c0, self.c1 - o.c1)
+
+    def __mul__(self, o: Fp12) -> Fp12:
         a0, a1, b0, b1 = self.c0, self.c1, o.c0, o.c1
         t0, t1 = a0 * b0, a1 * b1
         return Fp12(t0 + t1.mul_by_v(), (a0 + a1) * (b0 + b1) - t0 - t1)
 
-    def square(self):
+    def square(self) -> Fp12:
         a0, a1 = self.c0, self.c1
         t0 = a0 * a1
         c0 = (a0 + a1) * (a0 + a1.mul_by_v()) - t0 - t0.mul_by_v()
         return Fp12(c0, t0 + t0)
 
-    def conj(self): return Fp12(self.c0, -self.c1)
+    def conj(self) -> Fp12:
+        return Fp12(self.c0, -self.c1)
 
-    def inv(self):
+    def inv(self) -> Fp12:
         t = (self.c0.square() - self.c1.square().mul_by_v()).inv()
         return Fp12(self.c0 * t, -(self.c1 * t))
 
-    def frobenius(self, n=1):
+    def frobenius(self, n: int = 1) -> Fp12:
         """x -> x^(p^n), n in {1, 2, 3}"""
         g = {1: FROB1, 2: FROB2, 3: FROB3}[n]
         cj = (lambda a: a.conj()) if n % 2 else (lambda a: a)
@@ -208,15 +250,16 @@ class Fp12:
         c1 = Fp6(cj(self.c1.c0) * g[1], cj(self.c1.c1) * g[3], cj(self.c1.c2) * g[5])
         return Fp12(c0, c1)
 
-    def __pow__(self, e):
+    def __pow__(self, e: int) -> Fp12:
         r, b = Fp12.one(), self
         while e:
-            if e & 1: r = r * b
+            if e & 1:
+                r = r * b
             b = b.square()
             e >>= 1
         return r
 
-    def mul_by_034(self, c0, c3, c4):
+    def mul_by_034(self, c0: Fp2, c3: Fp2, c4: Fp2) -> Fp12:
         """Multiply by the sparse element c0 + (c3 + c4 v) w (c0, c3, c4 in Fp2), the shape of a line."""
         a0, a1 = self.c0, self.c1
         t0 = a0 * c0
@@ -224,26 +267,39 @@ class Fp12:
         t2 = (a0 + a1) * Fp6(c0 + c3, c4)
         return Fp12(t0 + t1.mul_by_v(), t2 - t0 - t1)
 
-    def is_one(self): return self == Fp12.one()
+    def is_one(self) -> bool:
+        return self == Fp12.one()
 
 
 # G1 over Fp
-def g1_on_curve(x, y):
+G1Point = tuple[int, int]  # affine; None is the point at infinity
+G2Point = tuple[Fp2, Fp2]
+Line = tuple[Fp2, Fp2, Fp2]  # the sparse element c0 + (c3 + c4 v) w
+
+
+def g1_on_curve(x: int, y: int) -> bool:
     return (y * y - x * x * x - 3) % P == 0
 
 
-def g1_neg(pt):
+@overload
+def g1_neg(pt: G1Point) -> G1Point: ...
+@overload
+def g1_neg(pt: None) -> None: ...
+def g1_neg(pt: G1Point | None) -> G1Point | None:
     return None if pt is None else (pt[0], (-pt[1]) % P)
 
 
-def g1_add(a, b):
+def g1_add(a: G1Point | None, b: G1Point | None) -> G1Point | None:
     """Affine addition; points are (x, y), None is the point at infinity."""
-    if a is None: return b
-    if b is None: return a
+    if a is None:
+        return b
+    if b is None:
+        return a
     x1, y1 = a
     x2, y2 = b
     if x1 == x2:
-        if (y1 + y2) % P == 0: return None
+        if (y1 + y2) % P == 0:
+            return None
         l = 3 * x1 * x1 * pow(2 * y1, P - 2, P) % P
     else:
         l = (y2 - y1) * pow(x2 - x1, P - 2, P) % P
@@ -251,11 +307,12 @@ def g1_add(a, b):
     return (x3, (l * (x1 - x3) - y1) % P)
 
 
-def g1_mul(pt, k):
+def g1_mul(pt: G1Point | None, k: int) -> G1Point | None:
     r = None
     for bit in bin(k % R)[2:]:
         r = g1_add(r, r)
-        if bit == '1': r = g1_add(r, pt)
+        if bit == '1':
+            r = g1_add(r, pt)
     return r
 
 
@@ -263,21 +320,28 @@ G1_GEN = (1, 2)
 
 
 # G2 over Fp2 (affine)
-def g2_on_curve(x, y):
+def g2_on_curve(x: Fp2, y: Fp2) -> bool:
     return y.square() == x.square() * x + TWIST_B
 
 
-def g2_neg(pt):
+@overload
+def g2_neg(pt: G2Point) -> G2Point: ...
+@overload
+def g2_neg(pt: None) -> None: ...
+def g2_neg(pt: G2Point | None) -> G2Point | None:
     return None if pt is None else (pt[0], -pt[1])
 
 
-def g2_add(a, b):
-    if a is None: return b
-    if b is None: return a
+def g2_add(a: G2Point | None, b: G2Point | None) -> G2Point | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
     x1, y1 = a
     x2, y2 = b
     if x1 == x2:
-        if (y1 + y2).is_zero(): return None
+        if (y1 + y2).is_zero():
+            return None
         l = x1.square() * 3 * (y1 + y1).inv()
     else:
         l = (y2 - y1) * (x2 - x1).inv()
@@ -285,21 +349,22 @@ def g2_add(a, b):
     return (x3, l * (x1 - x3) - y1)
 
 
-def g2_mul(pt, k):
+def g2_mul(pt: G2Point | None, k: int) -> G2Point | None:
     """[k] pt for pt in G2 (k is reduced mod r, so not for points outside G2)"""
     return g2_mul_unreduced(pt, k % R)
 
 
-def g2_mul_unreduced(pt, k):
+def g2_mul_unreduced(pt: G2Point | None, k: int) -> G2Point | None:
     """[k] pt for any point of the twist."""
     r = None
     for bit in bin(k)[2:]:
         r = g2_add(r, r)
-        if bit == '1': r = g2_add(r, pt)
+        if bit == '1':
+            r = g2_add(r, pt)
     return r
 
 
-def g2_random_point(rng):
+def g2_random_point(rng: random.Random) -> G2Point:
     """A random point of E'(Fp2); almost surely not in G2."""
     while True:
         x = Fp2(rng.randrange(P), rng.randrange(P))
@@ -308,34 +373,40 @@ def g2_random_point(rng):
             return (x, y)
 
 
-def g2_in_subgroup(pt):
+def g2_in_subgroup(pt: G2Point | None) -> bool:
     """pt is in G2, the order-r subgroup of E'(Fp2)."""
     return pt is not None and g2_mul_unreduced(pt, R) is None
 
 
-G2_GEN = (Fp2(10857046999023057135944570762232829481370756359578518086990519993285655852781,
-              11559732032986387107991004021392285783925812861821192530917403151452391805634),
-          Fp2(8495653923123431417604973247489272438418190587263600148770280649306958101930,
-              4082367875863433681332203403145435568316851327593401208105741076214120093531))
+G2_GEN = (
+    Fp2(
+        10857046999023057135944570762232829481370756359578518086990519993285655852781,
+        11559732032986387107991004021392285783925812861821192530917403151452391805634,
+    ),
+    Fp2(
+        8495653923123431417604973247489272438418190587263600148770280649306958101930,
+        4082367875863433681332203403145435568316851327593401208105741076214120093531,
+    ),
+)
 
 
-def g2_frobenius(pt):
+def g2_frobenius(pt: G2Point) -> G2Point:
     """The p-power Frobenius through the twist (psi): (x, y) -> (conj(x) gamma_{1,2}, conj(y) gamma_{1,3})."""
     x, y = pt
     return (x.conj() * FROB1[2], y.conj() * FROB1[3])
 
 
 # Miller loop (homogeneous projective T = (X, Y, Z), D-type twist)
-def line_double(T):
+def line_double(T: tuple[Fp2, Fp2, Fp2]) -> tuple[tuple[Fp2, Fp2, Fp2], Line]:
     """Doubling step: (2T, line coefficients (c0, c3, c4) before evaluation at P)."""
     x, y, z = T
-    a = (x * y) * pow(2, P - 2, P) # x y / 2
+    a = (x * y) * pow(2, P - 2, P)  # x y / 2
     b = y.square()
     c = z.square()
-    e = TWIST_B * (c + c + c) # 3 b' z^2
+    e = TWIST_B * (c + c + c)  # 3 b' z^2
     f = e + e + e
     g = (b + f) * pow(2, P - 2, P)
-    h = (y + z).square() - (b + c) # 2 y z
+    h = (y + z).square() - (b + c)  # 2 y z
     i = e - b
     j = x.square()
     e2 = e.square()
@@ -343,7 +414,7 @@ def line_double(T):
     return T2, (-h, j + j + j, i)
 
 
-def line_add(T, Q):
+def line_add(T: tuple[Fp2, Fp2, Fp2], Q: G2Point) -> tuple[tuple[Fp2, Fp2, Fp2], Line]:
     """Mixed addition step with affine Q: (T + Q, line coefficients (c0, c3, c4))."""
     x, y, z = T
     qx, qy = Q
@@ -360,7 +431,7 @@ def line_add(T, Q):
     return T2, (lam, -theta, j)
 
 
-def eval_line(coeffs, Pt):
+def eval_line(coeffs: Line, Pt: G1Point) -> Line:
     """The line evaluated at P = (xP, yP): the sparse element (c0 yP, c3 xP, c4)."""
     c0, c3, c4 = coeffs
     xP, yP = Pt
@@ -371,16 +442,16 @@ def eval_line(coeffs, Pt):
 # the line through T with slope lambda, evaluated at P, is
 #     yP + (-lambda xP) w + (lambda xT - yT) v w
 # It differs from the projective line by a factor in Fp2*, which the final exponentiation kills.
-def affine_double_slope(T):
+def affine_double_slope(T: G2Point) -> Fp2:
     x, y = T
     return x.square() * 3 * (y + y).inv()
 
 
-def affine_add_slope(T, Q):
+def affine_add_slope(T: G2Point, Q: G2Point) -> Fp2:
     return (Q[1] - T[1]) * (Q[0] - T[0]).inv()
 
 
-def affine_step(T, lam, Q=None):
+def affine_step(T: G2Point, lam: Fp2, Q: G2Point | None = None) -> tuple[G2Point, tuple[Fp2, Fp2]]:
     """Doubling (Q None) or addition with slope lam: (T', (c3, c4)) with c3 = -lam (the factor of xP)
     and c4 = lam xT - yT."""
     x, y = T
@@ -395,19 +466,19 @@ def affine_step(T, lam, Q=None):
     return (x2, y2), (-lam, lam * x - y)
 
 
-def affine_line(coeffs, Pt):
+def affine_line(coeffs: tuple[Fp2, Fp2], Pt: G1Point) -> Line:
     c3, c4 = coeffs
     xP, yP = Pt
     return (Fp2(yP, 0), c3 * xP, c4)
 
 
-def multi_miller_loop_affine(pairs, hints=None):
+def multi_miller_loop_affine(pairs: Sequence[tuple[G1Point, G2Point]], hints: list[list[Fp2]] | None = None) -> Fp12:
     """multi_miller_loop with affine steps.  If `hints` is a list, it receives the slopes of every step
     of each pair, in loop order: what the program gets as witness."""
     f = Fp12.one()
     Ts = [Q for _, Q in pairs]
     negQs = [g2_neg(Q) for _, Q in pairs]
-    per_pair = [[] for _ in pairs]
+    per_pair: list[list[Fp2]] = [[] for _ in pairs]
     digits = ATE_NAF
     for idx in range(len(digits) - 2, -1, -1):
         f = f.square()
@@ -436,7 +507,7 @@ def multi_miller_loop_affine(pairs, hints=None):
     return f
 
 
-def multi_miller_loop(pairs):
+def multi_miller_loop(pairs: Sequence[tuple[G1Point, G2Point]]) -> Fp12:
     """prod_i f_{6x+2,Q_i}(P_i) times the two Frobenius lines of each pair; the pairs run in lockstep,
     one squaring per iteration."""
     f = Fp12.one()
@@ -462,11 +533,11 @@ def multi_miller_loop(pairs):
     return f
 
 
-def miller_loop(Pt, Q):
+def miller_loop(Pt: G1Point, Q: G2Point) -> Fp12:
     return multi_miller_loop([(Pt, Q)])
 
 
-def final_exponentiation(f):
+def final_exponentiation(f: Fp12) -> Fp12:
     # easy part: f^((p^6 - 1)(p^2 + 1))
     f = f.conj() * f.inv()
     f = f.frobenius(2) * f
@@ -474,7 +545,7 @@ def final_exponentiation(f):
     return f ** ((P**4 - P**2 + 1) // R)
 
 
-def pairing(Pt, Q):
+def pairing(Pt: G1Point, Q: G2Point) -> Fp12:
     return final_exponentiation(miller_loop(Pt, Q))
 
 
@@ -487,18 +558,25 @@ def pairing(Pt, Q):
 LAMBDA = 6 * X + 2 + P - P**2 + P**3
 H = (P**12 - 1) // R
 assert LAMBDA % R == 0 and H % 27 == 0 and (H // 3) % 9 == 0
-W27 = Fp12(Fp6(Fp2(0), Fp2(15836853091350922279986891577810600172284355046962111325588466915565967022071,
-                        7058631431986672612198325957254478126651525007192415024767579040330467842072)))
-assert W27 ** 27 == Fp12.one() and W27 ** 9 != Fp12.one()
+W27 = Fp12(
+    Fp6(
+        Fp2(0),
+        Fp2(
+            15836853091350922279986891577810600172284355046962111325588466915565967022071,
+            7058631431986672612198325957254478126651525007192415024767579040330467842072,
+        ),
+    )
+)
+assert Fp12.one() == W27**27 and Fp12.one() != W27**9
 
 
-def residue_witness(f):
+def residue_witness(f: Fp12) -> tuple[Fp12, int] | None:
     """(c, s) with f W27^s = c^LAMBDA, s in {0, 1, 2}; None if f^H != 1 (the pairing product is not 1).
     c is a cube root of u = (f W27^s)^((LAMBDA/3)^-1 mod H/3), taken separately on the mu_27 part of u
     (a table lookup) and on the rest (an exponentiation)."""
     one = Fp12.one()
     for s in range(3):
-        y = f * W27 ** s
+        y = f * W27**s
         if y ** (H // 3) == one:
             break
     else:
@@ -506,27 +584,29 @@ def residue_witness(f):
     u = y ** pow(LAMBDA // 3, -1, H // 3)
     n = P**12 - 1
     a = pow(27, -1, n // 27)
-    u3, u27 = u ** ((1 - 27 * a) % n), u ** (27 * a % n) # u = u3 u27, u3 in mu_27, u27 of order prime to 3
+    u3, u27 = u ** ((1 - 27 * a) % n), u ** (27 * a % n)  # u = u3 u27, u3 in mu_27, u27 of order prime to 3
     c = u27 ** pow(3, -1, n // 27)
     for k in range(27):
         if W27 ** (3 * k) == u3:
-            return c * W27 ** k, s
+            return c * W27**k, s
     raise AssertionError('no cube root')
 
 
-def residue_check(f, c, s):
+def residue_check(f: Fp12, c: Fp12, s: int) -> bool:
     """The program's form of f W27^s = c^LAMBDA: f c^-(6x+2) pi(c^-1) pi^2(c) pi^3(c^-1) = W27^-s."""
     ci = c.inv()
-    return f * ci ** ATE_LOOP * ci.frobenius(1) * c.frobenius(2) * ci.frobenius(3) == (W27 ** s).inv()
+    return f * ci**ATE_LOOP * ci.frobenius(1) * c.frobenius(2) * ci.frobenius(3) == (W27**s).inv()
 
 
-def multi_pairing(pairs):
+def multi_pairing(pairs: Sequence[tuple[G1Point, G2Point]]) -> Fp12:
     """prod e(P_i, Q_i) with one final exponentiation."""
     return final_exponentiation(multi_miller_loop(pairs))
 
 
 # Groth16
-def groth16_verify(vk, proof, public_inputs):
+def groth16_verify(
+    vk: dict[str, Any], proof: tuple[G1Point | None, G2Point, G1Point | None], public_inputs: Sequence[int]
+) -> bool:
     """Groth16 verification: e(A, B) = e(alpha, beta) e(L, gamma) e(C, delta), L = ic[0] + sum a_i ic[i].
     vk = dict(alpha, beta, gamma, delta, ic); proof = (A, B, C).  Also checks that A, C are on the curve,
     that B is in G2 and that the inputs are below r."""
@@ -544,10 +624,11 @@ def groth16_verify(vk, proof, public_inputs):
     return lhs.is_one()
 
 
-def groth16_instance(n_inputs=2, seed=7, inputs=None):
+def groth16_instance(
+    n_inputs: int = 2, seed: int = 7, inputs: Sequence[int] | None = None
+) -> tuple[dict[str, Any], tuple[G1Point | None, G2Point | None, G1Point | None], list[int]]:
     """A synthetic key and proof for tests: random toxic waste, and A, B, C chosen to satisfy the
     verification equation.  A verifier cannot tell it from a real proof.  Random inputs unless given."""
-    import random
     r = random.Random(seed)
     alpha, beta, gamma, delta = (r.randrange(1, R) for _ in range(4))
     ic_scalars = [r.randrange(1, R) for _ in range(n_inputs + 1)]
@@ -557,7 +638,12 @@ def groth16_instance(n_inputs=2, seed=7, inputs=None):
     a, b = r.randrange(1, R), r.randrange(1, R)
     L = (ic_scalars[0] + sum(s * x for s, x in zip(ic_scalars[1:], inputs))) % R
     c = (a * b - alpha * beta - L * gamma) * pow(delta, -1, R) % R
-    vk = dict(alpha=g1_mul(G1_GEN, alpha), beta=g2_mul(G2_GEN, beta), gamma=g2_mul(G2_GEN, gamma),
-              delta=g2_mul(G2_GEN, delta), ic=[g1_mul(G1_GEN, s) for s in ic_scalars])
+    vk = {
+        'alpha': g1_mul(G1_GEN, alpha),
+        'beta': g2_mul(G2_GEN, beta),
+        'gamma': g2_mul(G2_GEN, gamma),
+        'delta': g2_mul(G2_GEN, delta),
+        'ic': [g1_mul(G1_GEN, s) for s in ic_scalars],
+    }
     proof = (g1_mul(G1_GEN, a), g2_mul(G2_GEN, b), g1_mul(G1_GEN, c))
     return vk, proof, inputs

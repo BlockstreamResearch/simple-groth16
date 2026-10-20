@@ -11,12 +11,16 @@ the sighash of the spending transaction as leaf 0.
 The program gets the siblings of leaf 0 in its witness and recomputes the root from its sig_all_hash
 jet (groth16.py, `binding`).
 """
+
+from __future__ import annotations
+
 import hashlib
+from collections.abc import Sequence
 
 MASK = 2**253 - 1
 
 
-def leaf(v):
+def leaf(v: int | bytes) -> bytes:
     """A 32-byte leaf from an int (big-endian) or bytes."""
     if isinstance(v, bytes):
         assert len(v) == 32, 'a leaf is 32 bytes'
@@ -24,23 +28,23 @@ def leaf(v):
     return v.to_bytes(32, 'big')
 
 
-def node(left, right):
+def node(left: bytes, right: bytes) -> bytes:
     return hashlib.sha256(left + right).digest()
 
 
-def depth_of(n_leaves):
+def depth_of(n_leaves: int) -> int:
     d = 0
     while 2**d < n_leaves:
         d += 1
     return max(d, 1)
 
 
-def levels(leaves, depth=None):
+def levels(leaves: Sequence[int | bytes], depth: int | None = None) -> list[list[bytes]]:
     """The levels of the tree, bottom-up: the padded leaves first, the root (a one-item list) last."""
-    leaves = [leaf(v) for v in leaves]
-    depth = depth_of(len(leaves)) if depth is None else depth
-    assert len(leaves) <= 2**depth
-    level = leaves + [bytes(32)] * (2**depth - len(leaves))
+    items = [leaf(v) for v in leaves]
+    depth = depth_of(len(items)) if depth is None else depth
+    assert len(items) <= 2**depth
+    level = items + [bytes(32)] * (2**depth - len(items))
     out = [level]
     while len(level) > 1:
         level = [node(level[i], level[i + 1]) for i in range(0, len(level), 2)]
@@ -48,11 +52,11 @@ def levels(leaves, depth=None):
     return out
 
 
-def root(leaves, depth=None):
+def root(leaves: Sequence[int | bytes], depth: int | None = None) -> bytes:
     return levels(leaves, depth)[-1][0]
 
 
-def siblings(leaves, index=0, depth=None):
+def siblings(leaves: Sequence[int | bytes], index: int = 0, depth: int | None = None) -> list[bytes]:
     """The siblings of leaf `index` along its path, bottom-up."""
     out = []
     for level in levels(leaves, depth)[:-1]:
@@ -61,12 +65,12 @@ def siblings(leaves, index=0, depth=None):
     return out
 
 
-def public_signal(root_bytes):
+def public_signal(root_bytes: bytes) -> int:
     """The root as the circuit's public signal: top three bits cleared."""
     return int.from_bytes(root_bytes, 'big') & MASK
 
 
-def sighash_limbs(sighash):
+def sighash_limbs(sighash: int | bytes) -> list[int]:
     """The circuit's encoding of the sighash: two 128-bit limbs, high then low."""
     v = int.from_bytes(leaf(sighash), 'big')
     return [v >> 128, v & (2**128 - 1)]

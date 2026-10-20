@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 tools/harness/target/
 circuits/node_modules/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/

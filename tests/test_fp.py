@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """F_p arithmetic (groth/fp.py): the program against the numeric model, on random words.
 
-    python3 tests/test_fp.py          # tests
-    python3 tests/test_fp.py bench    # cost of each operation
+python3 tests/test_fp.py          # tests
+python3 tests/test_fp.py bench    # cost of each operation
 """
-import os, random, sys
+
+import os
+import random
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fp as F
-from groth.sym import Sym, Num
-from groth.dsl import wv, wpairs, Tpairs
 import harness
+
+from groth import fp as F
+from groth.dsl import Tpairs, wpairs, wv
+from groth.sym import Num, Sym
 
 P = F.P
 
@@ -30,6 +35,7 @@ def run_case(name, ops, rng, inputs_hi=F.WORD_MAX, nwords=3, verbose=True):
     def check_num(label, v):
         expected.append((label, be.check(v.e, v.hi), v.hi))
         return 0
+
     ops(fp, [F.Val(w, inputs_hi) for w in words], check_num)
     exp_words = {label: w for label, w, hi in expected}
     # symbolic pass: the same computation with verify(eq_256) against the recorded words
@@ -52,8 +58,10 @@ def run_case(name, ops, rng, inputs_hi=F.WORD_MAX, nwords=3, verbose=True):
     r['words_in'] = words
     ok = r['cost'] == estimate
     if verbose:
-        print(f'{name:28} cost {r["cost"]:>10}  estimate {estimate:>10}  {"ok" if ok else "MISMATCH"}  '
-              f'prog {r["program_bytes"]} B  ({r["seconds"]:.1f}s)')
+        print(
+            f'{name:28} cost {r["cost"]:>10}  estimate {estimate:>10}  {"ok" if ok else "MISMATCH"}  '
+            f'prog {r["program_bytes"]} B  ({r["seconds"]:.1f}s)'
+        )
     assert ok, (r['cost'], estimate)
     return r, expected
 
@@ -70,16 +78,26 @@ def ops_basic(fp, ins, check):
 
     def body(v, lift):
         a, b, c = v
-        m = fp.mul(a, b); out.append(check('a*b', m))
-        s = fp.sqr(a); out.append(check('a^2', s))
-        t = fp.add(m, s); out.append(check('ab+a^2', t))
-        n = fp.neg(t); out.append(check('-(ab+a^2)', n))
-        u = fp.sub(a, n); out.append(check('a+(ab+a^2)', u)) # bound 4.29 p
-        u = fp.normalize(u); out.append(check('normalized', u)) # bound 1.24 p
-        d = fp.double(u); out.append(check('2(...)', d))
-        mc = fp.mul_const(d, 12345); out.append(check('*12345', mc))
-        dt = fp.dot([(a, b), (c, a), (b, b), (c, c)], neg=(1, 3)); out.append(check('ab-ca+bb-cc', dt))
+        m = fp.mul(a, b)
+        out.append(check('a*b', m))
+        s = fp.sqr(a)
+        out.append(check('a^2', s))
+        t = fp.add(m, s)
+        out.append(check('ab+a^2', t))
+        n = fp.neg(t)
+        out.append(check('-(ab+a^2)', n))
+        u = fp.sub(a, n)
+        out.append(check('a+(ab+a^2)', u))  # bound 4.29 p
+        u = fp.normalize(u)
+        out.append(check('normalized', u))  # bound 1.24 p
+        d = fp.double(u)
+        out.append(check('2(...)', d))
+        mc = fp.mul_const(d, 12345)
+        out.append(check('*12345', mc))
+        dt = fp.dot([(a, b), (c, a), (b, b), (c, c)], neg=(1, 3))
+        out.append(check('ab-ca+bb-cc', dt))
         return be.checks(out[3:])
+
     inner = fp.let([a, b, c], body)
     tm = fp.to_mont(fp.raw(ins[0].e, F.WORD_MAX))
     fm = fp.from_mont(tm)
@@ -94,7 +112,7 @@ def ops_chain(fp, ins, check):
 
     def step(i, x, a, b, c):
         if i == 12:
-            y = fp.add(fp.add(x, a), fp.add(b, c)) # four terms below 1.34 p: 5.1 p < 5.29 p
+            y = fp.add(fp.add(x, a), fp.add(b, c))  # four terms below 1.34 p: 5.1 p < 5.29 p
             return be.checks([check('chain12', x), check('sum4', y), check('y*b', fp.mul(y, b))])
         nxt = fp.mul(x, b) if i % 2 == 0 else fp.sqr(x)
         return fp.let([nxt], lambda nv, lift: step(i + 1, nv[0], lift(a), lift(b), lift(c)))
@@ -112,16 +130,8 @@ def ops_dot(fp, ins, check):
         # 12 products of 1.29 p values: 12 * 1.67 = 20 p^2 < 22.7 p^2
         terms = [(a, b), (b, c), (c, a), (a, a), (b, b), (c, c)] * 2
         return be.checks([check('dot12', fp.dot(terms)), check('dot6neg', fp.dot(terms[:6], neg=(0, 2, 4)))])
+
     return fp.let([a, b, c], body)
-
-
-def check_semantics(expected, model_fn):
-    """expected: (label, word, hi) triples; model_fn(label) -> the field value or None."""
-    for label, word, hi in expected:
-        assert word <= hi
-        want = model_fn(label)
-        if want is not None:
-            assert field_value(word) == want, label
 
 
 def main():
@@ -138,7 +148,7 @@ def main():
         assert f(d['*12345']) == 12345 * 2 * (a + a * b + a * a) % P
         assert f(d['ab-ca+bb-cc']) == (a * b - c * a + b * b - c * c) % P
         assert f(d['to_mont(a_raw)']) == r['words_in'][0] % P
-        assert d['from_mont'] % P == r['words_in'][0] % P # a plain (non-Montgomery) word
+        assert d['from_mont'] % P == r['words_in'][0] % P  # a plain (non-Montgomery) word
         r, exp = run_case(f'fp_chain_{it}', ops_chain, rng)
         d = {label: word for label, word, hi in exp}
         a, b, c = (field_value(w) for w in r['words_in'])
@@ -158,21 +168,27 @@ def bench():
     """Cost of each operation on operands read from the witness (bounds 2p), net of reading the
     operands and of the check that observes the result."""
     rng = random.Random(5)
-    rows = []
 
     def one(label, fn, nwords=3, hi=2 * P - 1):
         def ops(fp, ins, check):
             vals = [fp.raw(x.e, hi) for x in ins]
-            touch = [check(f'in{i}', v) for i, v in enumerate(vals)] # every witness part must be consumed
+            touch = [check(f'in{i}', v) for i, v in enumerate(vals)]  # every witness part must be consumed
             res = [] if fn is None else [check(label, fn(fp, vals))]
             return fp.be.checks(touch + res)
-        r, exp = run_case('bench_' + label.replace(' ', '_').replace('(', '').replace(')', ''), ops, rng,
-                          inputs_hi=hi, nwords=nwords, verbose=False)
+
+        r, _ = run_case(
+            'bench_' + label.replace(' ', '_').replace('(', '').replace(')', ''),
+            ops,
+            rng,
+            inputs_hi=hi,
+            nwords=nwords,
+            verbose=False,
+        )
         return r['cost']
 
     base = one('base', None)
-    read = one('read', lambda fp, v: v[0]) # check of a plain projection (take iden = 456 mWU)
-    overhead = read - base - 456 # cost of observing a result: verify(eq_256(x, const))
+    read = one('read', lambda fp, v: v[0])  # check of a plain projection (take iden = 456 mWU)
+    overhead = read - base - 456  # cost of observing a result: verify(eq_256(x, const))
     cases = [
         ('mul', lambda fp, v: fp.mul(v[0], v[1])),
         ('sqr', lambda fp, v: fp.sqr(v[0])),
@@ -186,11 +202,13 @@ def bench():
         ('dot2 (one term negated)', lambda fp, v: fp.dot([(v[0], v[1]), (v[1], v[2])], neg=(1,))),
         ('dot3', lambda fp, v: fp.dot([(v[0], v[1]), (v[1], v[2]), (v[2], v[0])])),
         ('dot4', lambda fp, v: fp.dot([(v[0], v[1]), (v[1], v[2]), (v[2], v[0]), (v[0], v[0])])),
-        ('dot6 (operands < 1.5p)', lambda fp, v: fp.dot([(v[0], v[1]), (v[1], v[2]), (v[2], v[0]), (v[0], v[0]), (v[1], v[1]), (v[2], v[2])])),
+        (
+            'dot6 (operands < 1.5p)',
+            lambda fp, v: fp.dot([(v[0], v[1]), (v[1], v[2]), (v[2], v[0]), (v[0], v[0]), (v[1], v[1]), (v[2], v[2])]),
+        ),
     ]
     for label, fn in cases:
         c = one(label, fn, hi=(3 * P // 2 if 'dot6' in label else 2 * P - 1)) - base - overhead
-        rows.append((label, c))
         print(f'{label:26} {c:>8} mWU')
 
 

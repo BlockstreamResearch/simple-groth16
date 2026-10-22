@@ -52,6 +52,7 @@ class Groth16:
         self.vk, self.depth = vk, depth
         self.n = len(vk['ic']) - 1
         ensure(self.n >= 1, 'the key has no public input')
+        ensure(depth >= 0 and (depth == 0 or self.n == 1), 'a bound circuit has one public signal')
         self.pc = PairingCheck(
             fp,
             vk['delta'],
@@ -204,6 +205,11 @@ class Groth16:
         body = g.program()
         be.em.define('w_in', 'witness', f'_ -> {g.witness_type()}')
         be.em.define('main', f'comp w_in ({body.t})')
+        # each witness node is read once: a spender may unshare a node and give each copy its own value
+        uses = be.em.tree_uses()
+        nodes = [name for name, expr, _ in be.em.defs if expr == 'witness']
+        ensure(len(nodes) == 2 + pairing.N_STEPS, 'the witness nodes')
+        ensure(all(uses.get(name) == 1 for name in nodes), 'a witness node is read more than once')
         return be.em.text(), g, 2 * (100 + g.witness_bits()) + body.c
 
     @staticmethod

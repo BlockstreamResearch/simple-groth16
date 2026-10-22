@@ -91,6 +91,30 @@ class Emitter:
         self.defs.append((name, expr, None))
         return name
 
+    def tree_uses(self, root: str = 'main') -> dict[str, int]:
+        """How often each definition occurs in the tree unfolding of `root` (the DAG's sharing undone).
+        A spender may unshare a node, so a witness node that occurs twice could be given two values."""
+        defined = {name for name, _, _ in self.defs}
+        refs = {name: [t for t in _NAME.findall(expr) if t in defined] for name, expr, _ in self.defs}
+        order: list[str] = []  # post-order from root
+        seen = {root}
+        stack = [(root, iter(refs[root]))]
+        while stack:
+            name, it = stack[-1]
+            child = next(it, None)
+            if child is None:
+                order.append(name)
+                stack.pop()
+            elif child not in seen:
+                seen.add(child)
+                stack.append((child, iter(refs[child])))
+        uses = dict.fromkeys(order, 0)
+        uses[root] = 1
+        for name in reversed(order):  # parents before children
+            for child in refs[name]:
+                uses[child] += uses[name]
+        return uses
+
     def text(self) -> str:
         """The definitions, with the constants last and atoms without parentheses.  The parser of
         rust-simplicity 0.9 finds the line and column of each token by scanning the text from its start,
@@ -105,6 +129,7 @@ class Emitter:
         return '\n'.join(out + consts) + '\n'
 
 
+_NAME = re.compile(r'[A-Za-z_]\w*')
 _ATOM = re.compile(r'\((iden|unit|[nk]\d+|jet_\w+|[A-Z][A-Z_0-9]*)\)')
 _CONST = re.compile(r'k\d+$')  # Sym.const's names
 

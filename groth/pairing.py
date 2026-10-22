@@ -98,6 +98,37 @@ STEPS = loop_steps()  # 65 doublings, 8 + 13 additions, 2 Frobenius additions
 N_STEPS = len(STEPS)
 ADDS = ('A+', 'A-', 'F1', 'F2')
 
+# The twist E'(F_p2) is cyclic of order r h, h = 2p - r squarefree, the product of COFACTOR_PRIMES, and
+# psi multiplies its points of prime order l by PSI_EIGEN[l] (tests/test_g2_check.py derives them).
+COFACTOR_PRIMES = (10069, 5864401, 1875725156269, 197620364512881247228717050342013327560683201906968909)
+PSI_EIGEN = {
+    10069: 5166,
+    5864401: 5415174,
+    1875725156269: 1368874307508,
+    197620364512881247228717050342013327560683201906968909: 158432335229605513038047029902729871849380703471871696,
+    bn254.R: bn254.P % bn254.R,
+}
+
+
+def additions_avoid_q(steps: Sequence[str]) -> bool:
+    """Whatever the point B of the twist, no addition of the loop `steps` meets T = Q, and the loop reaches
+    [6x + 2] B before its two Frobenius additions.  The slope relations need the first (they have no
+    inverse of xQ - x, so T = Q would leave the prover a free slope), and the G2 check after the loop the
+    second.  With T = [k] B and Q = [q] B (q = +-1, then psi(B) and -psi^2(B)), T = Q needs k = q modulo
+    a prime of the group order."""
+    if list(steps[-2:]) != ['F1', 'F2'] or any(kind not in ('D', 'A+', 'A-') for kind in steps[:-2]):
+        return False
+    k = 1
+    for kind in steps[:-2]:
+        if kind == 'D':
+            k *= 2
+        else:
+            q = 1 if kind == 'A+' else -1
+            if any((k - q) % l == 0 for l in PSI_EIGEN):
+                return False
+            k += q
+    return k == 6 * bn254.X + 2 and all((k - mu) % l and (k + mu + mu * mu) % l for l, mu in PSI_EIGEN.items())
+
 
 def step_points(Q: bn254.G2Point) -> dict[str, bn254.G2Point | None]:
     """The point added at each kind of step, for the G2 point Q."""
@@ -668,6 +699,7 @@ class PairingCheck:
     def __init__(
         self, fp: Fp, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12], b: dict[str, int] | None = None
     ) -> None:
+        ensure(additions_avoid_q(STEPS), 'an addition of the loop can meet T = Q')
         self.fp, self.be, self.cv = fp, fp.be, Curve(fp)
         self.prover = pr = Prover(delta, const, gt)
         # per step, the line constants of delta: c3 and c4, two Montgomery words each
@@ -693,6 +725,10 @@ class PairingCheck:
                 name = f'STEP_{kind}' + ('' if commit else '_')
                 self.steps[(kind, commit)] = be.function(name, shape, self.step_body(kind, commit))
         self.QCHUNK = be.function('QCHUNK', [[words(2), words(7)], words(8)], self.qchunk_body)
+        # the step functions and QCHUNK take the loop state within these bounds and must give it back within
+        # them (sample_bounds found them so; a stale or hand-made bounds dict must not slip through)
+        for nm in ('N', 'D', 'acc', 'x', 'y', 'qz'):
+            ensure(self.b.get(nm + '_out', 0) <= self.b[nm], f'the loop state {nm} exceeds its bound')
         self.EVAL = be.function('EVAL', [[words(4), words(2)], E('', 256, 0)], self.eval_body)
         self.T6 = be.function('T6', [words(4), words(4)], self.t6_body) if pr.plan else None
         if is_sym(be):

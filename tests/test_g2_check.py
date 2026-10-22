@@ -147,7 +147,7 @@ def main():
             assert r['cost'] == estimate, (r['cost'], estimate)
             print(f'{label:24} accepted')
         else:
-            assert not r.get('ok') and r.get('stage') in ('exec', 'finalize'), (label, r)
+            harness.expect_rejected(r, label)
             print(f'{label:24} rejected: only its two G2 relations fail')
     print('all ok')
 

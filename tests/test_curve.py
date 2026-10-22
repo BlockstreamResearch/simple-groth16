@@ -58,7 +58,7 @@ def run(name, words, build, expect_ok=True, verbose=True, hi=None):
         if verbose:
             print(f'{name:22} cost {r["cost"]:>10}  estimate {estimate:>10}  ok  prog {r["program_bytes"]} B')
     else:
-        assert not r.get('ok') and r.get('stage') in ('exec', 'finalize'), (name, r)
+        harness.expect_rejected(r, name)
         if verbose:
             print(f'{name:22} rejected as expected ({r.get("error", "")[:60]})')
     return r, exp
@@ -117,7 +117,7 @@ def run_select(name, rng, lo, w, expect_ok=True, verbose=True):
         if verbose:
             print(f'{name:22} cost {r["cost"]:>10}  estimate {estimate:>10}  ok  prog {r["program_bytes"]} B')
     else:
-        assert not r.get('ok') and r.get('stage') in ('exec', 'finalize'), (name, r)
+        harness.expect_rejected(r, name)
         if verbose:
             print(f'{name:22} rejected as expected')
 

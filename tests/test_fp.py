@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""F_p arithmetic (groth/fp.py): the program against the numeric model, on random words.
+"""F_p arithmetic (groth/fp.py): the program against the numeric model, on random words and on words the
+jets must reduce first (at least the secp256k1 field prime or group order, as a spender may give them).
 
 python3 tests/test_fp.py          # tests
 python3 tests/test_fp.py bench    # cost of each operation
@@ -23,10 +24,11 @@ def random_words(rng, n, hi):
     return [rng.randrange(hi + 1) for _ in range(n)]
 
 
-def run_case(name, ops, rng, inputs_hi=F.WORD_MAX, nwords=3, verbose=True):
+def run_case(name, ops, rng, inputs_hi=F.WORD_MAX, nwords=3, verbose=True, words=None):
     """ops(fp, ins, check) builds the computation and returns its checks.  check(label, val) records the
-    word in the numeric pass and verifies the program's word against it in the symbolic pass."""
-    words = random_words(rng, nwords, inputs_hi)
+    word in the numeric pass and verifies the program's word against it in the symbolic pass.  words: the
+    input words (random by default)."""
+    words = random_words(rng, nwords, inputs_hi) if words is None else words
     # numeric pass: run the model, record every checked word
     be = Num()
     fp = F.Fp(be)
@@ -136,8 +138,11 @@ def ops_dot(fp, ins, check):
 
 def main():
     rng = random.Random(int(os.environ.get('SEED', '1')))
-    for it in range(int(os.environ.get('ITERS', '2'))):
-        r, exp = run_case(f'fp_basic_{it}', ops_basic, rng)
+    # words that random draws below 2^256 almost never give: the jets reduce them modulo their primes
+    edge = [2**256 - 1, Num.P_SECP + 5, Num.N_SECP + 7]
+    for it in [*range(int(os.environ.get('ITERS', '2'))), 'edge']:
+        words = edge if it == 'edge' else None
+        r, exp = run_case(f'fp_basic_{it}', ops_basic, rng, words=words)
         d = {label: word for label, word, hi in exp}
         a, b, c = (field_value(d[k]) for k in 'abc')
         f = field_value
@@ -149,14 +154,14 @@ def main():
         assert f(d['ab-ca+bb-cc']) == (a * b - c * a + b * b - c * c) % P
         assert f(d['to_mont(a_raw)']) == r['words_in'][0] % P
         assert d['from_mont'] % P == r['words_in'][0] % P  # a plain (non-Montgomery) word
-        r, exp = run_case(f'fp_chain_{it}', ops_chain, rng)
+        r, exp = run_case(f'fp_chain_{it}', ops_chain, rng, words=words)
         d = {label: word for label, word, hi in exp}
         a, b, c = (field_value(w) for w in r['words_in'])
         x = a
         for i in range(12):
             x = x * b % P if i % 2 == 0 else x * x % P
         assert f(d['chain12']) == x and f(d['sum4']) == (x + a + b + c) % P and f(d['y*b']) == (x + a + b + c) * b % P
-        r, exp = run_case(f'fp_dot_{it}', ops_dot, rng)
+        r, exp = run_case(f'fp_dot_{it}', ops_dot, rng, words=words)
         d = {label: word for label, word, hi in exp}
         a, b, c = (field_value(w) for w in r['words_in'])
         assert f(d['dot12']) == 2 * (a * b + b * c + c * a + a * a + b * b + c * c) % P

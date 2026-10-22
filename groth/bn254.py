@@ -9,7 +9,7 @@ checked against py_ecc (tests/test_bn254_ref.py).
     E' : y^2 = x^3 + 3/(9+u)           over Fp2      (G2 = E'[r], D-type twist, cofactor h = 2p - r)
     Fp2 = Fp[u]/(u^2 + 1), Fp6 = Fp2[v]/(v^3 - (9+u)), Fp12 = Fp6[w]/(w^2 - v)
 
-h = 10069 * 5864401 * 1875725156269 * q (q a 177-bit prime), so E'(Fp2) has points of small order that
+h = 10069 * 5864401 * 1875725156269 * q (q a 178-bit prime), so E'(Fp2) has points of small order that
 are not in G2.
 """
 

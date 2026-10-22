@@ -8,10 +8,14 @@
 
 Needs circom (CIRCOM, default `circom`) and `npm install` in circuits/ (snarkjs and circomlib;
 NODE_MODULES to use another directory).  `setup` downloads a powers-of-tau file sized for the circuit
-from the perpetual powers of tau (PTAU to use a local file).  tools/regtest.sh runs both on a node.
+from the perpetual powers of tau (PTAU to use a local file) and refuses it unless its BLAKE2b-512 digest
+is the one recorded below for its size (PTAU_BLAKE2B to give the digest of another file).  The key's
+alpha, beta and IC points come from that file, so a substituted file with a known trapdoor would give a
+key anyone can prove false statements for.  tools/regtest.sh runs both on a node.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -32,6 +36,13 @@ CIRCUIT = os.path.join(ROOT, 'circuits', 'multiplier.circom')
 NAME = 'multiplier'
 VALUES = 1  # the circuit's public values behind the root: c
 PTAU_URL = 'https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_{power}.ptau'
+# BLAKE2b-512 of ppot_0080_{power}.ptau, the prepared files of the perpetual powers of tau after 80
+# contributions.  Recorded from the file PTAU_URL served on 2026-10-14; the ceremony's README
+# (github.com/privacy-ethereum/perpetualpowersoftau) lists the digests to compare with.
+PTAU_BLAKE2B = {
+    16: '9532c6c04a21335577713724b6d46c266a93aa621b78882b8b64b26f3080a8f0'
+    'd974aded00c4d781adbdf493a45c51db455108f7aeedb49971569d57a56971c3',
+}
 
 
 def run(cmd, **kw):
@@ -43,17 +54,44 @@ def snarkjs(*args, **kw):
     return run([SNARKJS] + list(args), **kw)
 
 
+def blake2b(path):
+    h = hashlib.blake2b(digest_size=64)
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def ptau(out, r1cs):
-    """A prepared powers-of-tau file for the circuit (2^power >= constraints + 2)."""
+    """A prepared powers-of-tau file for the circuit (2^power >= constraints + 2), checked against its
+    recorded digest whether it is downloaded, cached or given with PTAU."""
     info = snarkjs('r1cs', 'info', r1cs, capture_output=True, text=True).stdout
     constraints = int(re.search(r'# of Constraints: (\d+)', info).group(1))
     power = max(1, math.ceil(math.log2(constraints + 2)))
+    expected = os.environ.get('PTAU_BLAKE2B', PTAU_BLAKE2B.get(power))
+    if not expected:
+        sys.exit(
+            f'no recorded digest for the powers of tau of size 2^{power}: add it to PTAU_BLAKE2B or set PTAU_BLAKE2B'
+        )
     path = os.environ.get('PTAU', os.path.join(out, f'pot{power}_final.ptau'))
-    if not os.path.exists(path):
-        url = PTAU_URL.format(power=power)
-        print(f'{constraints} constraints: downloading the powers of tau for 2^{power} from {url}', flush=True)
-        run(['curl', '-sSL', '-o', path + '.part', url])
-        os.rename(path + '.part', path)
+    if os.path.exists(path):
+        if blake2b(path) != expected:
+            sys.exit(
+                f'{path} is not the expected powers of tau (BLAKE2b-512 {expected[:16]}...): remove it or fix PTAU'
+            )
+        return path
+    url = PTAU_URL.format(power=power)
+    print(f'{constraints} constraints: downloading the powers of tau for 2^{power} from {url}', flush=True)
+    part = path + '.part'
+    try:
+        run(['curl', '--fail', '--proto', '=https', '--proto-redir', '=https', '-sSL', '-o', part, url])
+        got = blake2b(part)
+        if got != expected:
+            sys.exit(f'the downloaded powers of tau has BLAKE2b-512 {got[:16]}..., not {expected[:16]}...: not used')
+        os.rename(part, path)
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
     return path
 
 
@@ -72,8 +110,12 @@ def setup(a):
     os.makedirs(out, exist_ok=True)
     run([CIRCOM, CIRCUIT, '--r1cs', '--wasm', '-o', out, '-l', NODE_MODULES])
     r1cs, zkey0, zkey = (os.path.join(out, f) for f in (f'{NAME}.r1cs', f'{NAME}_0000.zkey', f'{NAME}.zkey'))
-    snarkjs('groth16', 'setup', r1cs, ptau(out, r1cs), zkey0)
-    snarkjs('zkey', 'contribute', zkey0, zkey, '--name=demo', '-e=simple-groth demo entropy')
+    pot = ptau(out, r1cs)
+    snarkjs('groth16', 'setup', r1cs, pot, zkey0)
+    # one phase-2 contribution; snarkjs mixes its own randomness into this entropy as well
+    snarkjs('zkey', 'contribute', zkey0, zkey, '--name=demo', f'-e={os.urandom(32).hex()}')
+    # check that the key comes from the circuit and the checked powers of tau; prints the contribution hash
+    snarkjs('zkey', 'verify', r1cs, pot, zkey)
     snarkjs('zkey', 'export', 'verificationkey', zkey, os.path.join(out, 'verification_key.json'))
     run(
         [

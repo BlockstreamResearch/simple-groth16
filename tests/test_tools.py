@@ -3,17 +3,20 @@
 
 tools/groth16_snarkjs.py: a circuit is bound to the transaction unless --unbound is given (--values 0 is
 PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive python -O, and a witness
-whose leaves do not give the public signal is refused.
+whose leaves do not give the public signal is refused.  tools/circom_demo.py: a powers-of-tau file is
+used only if its BLAKE2b-512 digest is the recorded one, whether it is cached or downloaded.
 
     python3 tests/test_tools.py
 """
 
+import hashlib
 import importlib.util
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import types
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 EXAMPLE = os.path.join(ROOT, 'examples', 'multiplier')
@@ -84,12 +87,50 @@ def check_wrong_leaves(T, tmp):
     refused(T.main, ['witness', *files, '--out', os.path.join(tmp, 'w')], expect='--unbound')
 
 
+def check_ptau(tmp):
+    D = load('circom_demo')
+    D.snarkjs = lambda *a, **kw: types.SimpleNamespace(stdout='# of Constraints: 5\n')  # 2^3 >= 5 + 2
+    good, bad = b'the recorded powers of tau', b'another powers of tau'
+    D.PTAU_BLAKE2B = {3: hashlib.blake2b(good, digest_size=64).hexdigest()}
+    os.environ.pop('PTAU', None)
+    os.environ.pop('PTAU_BLAKE2B', None)
+    out = os.path.join(tmp, 'out')
+    os.makedirs(out)
+    cached = os.path.join(out, 'pot3_final.ptau')
+    served = []
+
+    def curl(cmd, **kw):  # stands in for the download: writes the served bytes to the -o path
+        assert cmd[0] == 'curl' and '--fail' in cmd and '=https' in cmd
+        with open(cmd[cmd.index('-o') + 1], 'wb') as f:
+            f.write(served[-1])
+
+    D.run = curl
+    # a cached file is checked, not trusted
+    with open(cached, 'wb') as f:
+        f.write(bad)
+    refused(D.ptau, out, 'r1cs', expect='not the expected powers of tau')
+    with open(cached, 'wb') as f:
+        f.write(good)
+    assert D.ptau(out, 'r1cs') == cached
+    os.remove(cached)
+    # a download is checked before it is kept, and nothing of a refused one stays
+    served.append(bad)
+    refused(D.ptau, out, 'r1cs', expect='not used')
+    assert os.listdir(out) == []
+    served.append(good)
+    assert D.ptau(out, 'r1cs') == cached and os.listdir(out) == ['pot3_final.ptau']
+    # a size with no recorded digest
+    D.PTAU_BLAKE2B = {}
+    refused(D.ptau, out, 'r1cs', expect='no recorded digest')
+
+
 def main():
     T = load('groth16_snarkjs')
     with tempfile.TemporaryDirectory() as tmp:
         check_binding_depth(T)
         check_optimized(tmp)
         check_wrong_leaves(T, tmp)
+        check_ptau(tmp)
     print('all ok')
 
 

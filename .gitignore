@@ -6,3 +6,7 @@ circuits/node_modules/
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
+# demo trusted-setup and prover files outside build/
+*.ptau
+*.zkey
+*.wtns

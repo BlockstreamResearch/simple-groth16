@@ -59,7 +59,7 @@ Each test generates programs for one layer, runs them through `hand` (which exec
 1. Build the key and the program:
 
    ```sh
-   cd circuits && npm install && cd ..
+   cd circuits && npm ci --ignore-scripts && cd ..
    python3 tools/circom_demo.py setup --out build/multiplier
    D=tools/harness/target/release/deploy
    $D compile build/multiplier/verifier.simpl build/multiplier/verifier 

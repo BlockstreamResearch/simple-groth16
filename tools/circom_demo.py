@@ -6,7 +6,7 @@
     python3 tools/circom_demo.py prove --out build/multiplier --sighash <64 hex digits> [--a 3 --b 7]
         proof.json, public.json, leaves.json and the verifier's witness verifier.w0.json
 
-Needs circom (CIRCOM, default `circom`) and `npm install` in circuits/ (snarkjs and circomlib;
+Needs circom (CIRCOM, default `circom`) and `npm ci --ignore-scripts` in circuits/ (snarkjs and circomlib;
 NODE_MODULES to use another directory).  `setup` downloads a powers-of-tau file sized for the circuit
 from the perpetual powers of tau (PTAU to use a local file) and refuses it unless its BLAKE2b-512 digest
 is the one recorded below for its size (PTAU_BLAKE2B to give the digest of another file).  The key's
@@ -100,7 +100,7 @@ def check_tools():
         sys.exit('circom not found: install circom 2 (https://github.com/iden3/circom/releases) or set CIRCOM')
     if not os.path.isdir(os.path.join(NODE_MODULES, 'circomlib')) or not os.path.exists(SNARKJS):
         sys.exit(
-            f'snarkjs and circomlib not found in {NODE_MODULES}: run `npm install` in circuits/ (or set NODE_MODULES)'
+            f'snarkjs and circomlib not found in {NODE_MODULES}: run `npm ci --ignore-scripts` in circuits/ (or set NODE_MODULES)'
         )
 
 

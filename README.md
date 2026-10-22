@@ -95,7 +95,7 @@ Each test generates programs for one layer, runs them through `hand` (which exec
    elements-cli -stdin sendrawtransaction < spend.hex
    ```
 
-`deploy spend` prunes the program against this transaction and executes it, so a wrong witness fails before anything is sent. You don't need a node for a Liquid testnet -- the faucet funds the address and the transaction can be broadcast through Blockstream's Esplora API (the `liquidtestnet` network in `deploy`).
+`deploy spend` prunes the program against this transaction and executes it, so a wrong witness fails before anything is sent; it also refuses a spend that a node would not take (above the consensus cap on the Bit Machine's cells, a budget that does not cover the cost, above the standard weight). You don't need a node for a Liquid testnet -- the faucet funds the address and the transaction can be broadcast through Blockstream's Esplora API (the `liquidtestnet` network in `deploy`).
 
 ## Your circuit
 

@@ -4,7 +4,7 @@ HARNESS := tools/harness
 E := examples/multiplier
 # the tests that run programs through the harness (inputs2: the verifier of a key with two public inputs;
 # inputs: keys with 3 to 5, in the numeric model and, for the window factors, in the harness)
-HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak
+HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm
 # and the plain-Python ones: poly, invariants (what the generator refuses), tools (what the command-line
 # tools refuse), and bn254_ref, which checks the reference against py_ecc
 TESTS := $(HARNESS_TESTS) poly invariants tools

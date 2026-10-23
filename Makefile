@@ -3,8 +3,9 @@ PYTHON ?= python3
 HARNESS := tools/harness
 E := examples/multiplier
 # the tests that run programs through the harness (inputs2: the verifier of a key with two public inputs;
-# inputs: keys with 3 to 5, in the numeric model and, for the window factors, in the harness)
-HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm
+# inputs: keys with 3 to 5, in the numeric model and, for the window factors, in the harness;
+# fflonk_keccak, fflonk_sha256: the fflonk verifier in each transcript mode)
+HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm fflonk_keccak fflonk_sha256
 # and the plain-Python ones: poly, invariants (what the generator refuses), tools (what the command-line
 # tools refuse), and bn254_ref, which checks the reference against py_ecc
 TESTS := $(HARNESS_TESTS) poly invariants tools
@@ -26,11 +27,14 @@ harness:
 
 test: $(addprefix test-,$(TESTS))
 
-$(addprefix test-,$(filter-out inputs2,$(HARNESS_TESTS))): test-%: harness
+$(addprefix test-,$(filter-out inputs2 fflonk_%,$(HARNESS_TESTS))): test-%: harness
 	$(PYTHON) tests/test_$*.py
 
 test-inputs2: harness
 	INPUTS=2 $(PYTHON) tests/test_groth16.py
+
+test-fflonk_keccak test-fflonk_sha256: test-fflonk_%: harness
+	$(PYTHON) tests/test_fflonk.py $*
 
 test-poly test-invariants test-tools test-bn254_ref: test-%:
 	$(PYTHON) tests/test_$*.py

@@ -7,7 +7,8 @@
 #   tools/regtest.sh build/multiplier
 #
 # Before: `python3 tools/circom_demo.py setup --out build/multiplier` and
-# `deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.
+# `deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.  The fflonk verifier runs
+# the same way, from `setup --protocol fflonk [--transcript sha256]` (its transaction is about 32 kvB).
 #
 # The node needs Simplicity enabled and a funded wallet.  elements.conf:
 #     chain=elementsregtest

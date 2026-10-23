@@ -112,14 +112,24 @@ A circuit that does not follow this convention needs `--unbound` in place of `--
 
 The program sees only the root, not the values behind it. A contract that must act on a value, say an address the proof commits to, would have to open that leaf as well; the generator does not do that yet.
 
+## fflonk
+
+The repository also has a verifier for snarkjs's fflonk proofs ([docs/fflonk.md](docs/fflonk.md)). fflonk's setup is universal: a circuit needs only a powers-of-tau file, with no ceremony of its own. Its verifier costs more than Groth16's: 123 M mWU with a SHA-256 transcript (proofs from `tools/snarkjs_sha256.mjs`) or 172 M with snarkjs's own Keccak-256 transcript, and a spend pads its witness to pay for it.
+
+```sh
+python3 tools/circom_demo.py setup --protocol fflonk --transcript sha256 --out build/fflonk
+tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/fflonk/verifier
+tools/regtest.sh build/fflonk   # an Elements regtest node: spend, a redirected spend rejected, key path
+```
+
 ## Repository
 
 | | |
 |---|---|
-| `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `poly.py`, `curve.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal) |
-| `circuits/` | `public_merkle.circom` (the public-signal convention) and the toy `multiplier.circom` |
+| `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `poly.py`, `curve.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal); for fflonk, `keccak.py`, `msm.py`, `frprog.py` (F_r straight-line code), `fflonk_ref.py` (the port of snarkjs's verifier) and `fflonk.py` |
+| `circuits/` | `public_merkle.circom` (the public-signal convention), the toy `multiplier.circom`, and `multiplier_fflonk.circom` for fflonk |
 | `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` and `sizes` profile them, `deploy` builds addresses and transactions |
-| `tools/` | `groth16_snarkjs.py` (snarkjs key and proof to program and witness), `circom_demo.py` and `regtest.sh` |
+| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (snarkjs key and proof to program and witness), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `circom_demo.py` and `regtest.sh` |
 | `tests/` | tests (plus `test_bn254_ref.py` against py_ecc) |
 | `examples/` | generated programs |
 | `docs/` | design notes and benchmarks |

@@ -23,7 +23,36 @@ Measured in `hand` on the toy circuit `circuits/multiplier_fflonk.circom` (3 pub
 | pruned program | 66 kB | 75 kB | 34 kB |
 | witness, before padding | 45 kB | 45 kB | 18 kB |
 
-The verifier costs more than its program and witness weigh, so a spend pads its witness (below): about 2.4 M mWU of padding with SHA-256, and the transaction weighs about the cost, 1 WU per 1,000 mWU, under the 400 kWU standard limit.
+The verifier costs more than its program and witness weigh, so a spend pads its witness (below). The Elements regtest spends of `tools/regtest.sh`:
+
+| | fflonk, SHA-256 | fflonk, Keccak | Groth16 |
+|---|---:|---:|---:|
+| padding | 30 blocks, 15.4 kB | 127 blocks, 65.0 kB | none |
+| cost with padding | 125.5 M mWU | 183.9 M mWU | 48.6 M mWU |
+| transaction | 126.6 kWU, 31.6 kvB | 185.3 kWU, 46.3 kvB | 53.3 kWU, 13.3 kvB |
+
+A padded transaction weighs about its cost, 1 WU per 1,000 mWU, under the 400 kWU standard limit in both modes.
+
+## Using it
+
+The toy circuit end to end:
+
+```sh
+python3 tools/circom_demo.py setup --protocol fflonk --transcript sha256 --out build/fflonk
+tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/fflonk/verifier
+python3 tools/circom_demo.py prove --out build/fflonk --sighash <the spending transaction's sighash>
+```
+
+`setup` compiles the circuit, runs snarkjs's fflonk setup, exports the verification key and writes the program. `prove` makes the proof (with `tools/snarkjs_sha256.mjs` for the SHA-256 mode) and the padded witness. `tools/regtest.sh build/fflonk` runs the whole flow on an Elements regtest node, as for Groth16. `make fflonk-demo` runs setup and prove in both modes, without a node.
+
+For your own circuit, use `tools/fflonk_snarkjs.py`:
+
+```sh
+python3 tools/fflonk_snarkjs.py program verification_key.json --transcript keccak --bind --out build/x
+python3 tools/fflonk_snarkjs.py witness verification_key.json proof.json public.json --transcript keccak --bind --out build/x
+```
+
+`--bind` binds the proof to the spending transaction. The circuit's first two public inputs must then be the transaction's sighash, as two 128-bit limbs, high then low, and the program compares them with its `sig_all_hash` jet. fflonk's verifier pays little per public input, so the sighash is bound directly; the Groth16 verifier instead commits to a Merkle root of its public values, to keep to one input. A circuit without the sighash needs `--unbound`, and then anyone who sees a spend can reuse its witness in another transaction to the same output.
 
 ## How it works
 
@@ -82,7 +111,7 @@ A version for two fixed G2 points would save B's slope relations, about 15 M.
 
 The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. The verifier costs more than its program and witness weigh, so a spend adds zero blocks of 512 bytes to the witness. A block costs 0.05 to 0.12 M mWU to check, depending on its group, and earns 0.51 M.
 
-How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`Groth16.budget_ok`).
+How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`Groth16.budget_ok`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size. What it measures is a lower bound, since the groups taken add their code, so the budget it predicts is one too.
 
 ## Soundness
 

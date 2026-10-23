@@ -1,6 +1,6 @@
 # Examples
 
-The verifier is generated from a verifying key, so there is no single Simplicity file to read: the key's points are the program's constants. This directory keeps two generated programs, a small one and the one spent on Liquid testnet, and the fflonk verifier's test proofs.
+The verifier is generated from a verifying key, so there is no single Simplicity file to read: the key's points are the program's constants. This directory keeps two generated programs, a small one and the one spent on Liquid testnet, and the test proofs of the fflonk verifier and of the Noir circuit.
 
 ## fp_mul.simpl
 
@@ -43,3 +43,14 @@ The fixtures of `tests/test_fflonk.py`: the snarkjs 0.7.6 fflonk key of `circuit
 | `proof_keccak.json` | a proof from snarkjs as it is (Keccak-256 transcript) |
 | `proof_sha256.json` | a proof from `tools/snarkjs_sha256.mjs` (SHA-256 transcript) |
 | `proof_keccak_other_sighash.json`, `public_other_sighash.json` | a valid proof for another sighash, which the bound program must reject |
+
+## noir/
+
+The fixtures of `tests/test_noir.py`: the snarkjs Groth16 key of `circuits/noir/multiplier`, converted to R1CS by `tools/noir_r1cs.py`, and proofs of c = 21.
+
+| file | |
+|---|---|
+| `multiplier.r1cs` | the R1CS the key was made from (2 constraints) |
+| `verification_key.json` | the snarkjs key (one demo contribution) |
+| `proof.json`, `public.json` | a proof for the harness's dummy sighash; the public signals are that sighash with its top three bits cleared, and c |
+| `proof_other_sighash.json`, `public_other_sighash.json` | a valid proof for another sighash, which the program must reject |

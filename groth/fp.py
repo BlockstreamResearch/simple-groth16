@@ -24,31 +24,50 @@ from . import bn254
 from .dsl import ensure, pairwise_sum
 from .sym import Backend, E, Term
 
-P = bn254.P
 P_SECP = 2**256 - 2**32 - 977
 N_SECP = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 R = P_SECP  # the Montgomery radix
-R_MOD_P = R % P
-R_INV = pow(R, -1, P)
-C1 = (-pow(P, -1, P_SECP)) % P_SECP  # -p^-1 mod p_s
-C2 = P % N_SECP
 C3 = pow(P_SECP, -1, N_SECP)  # p_s^-1 mod n_s
-C23 = C2 * C3 % N_SECP  # p p_s^-1 mod n_s
-CRT_MAX = (N_SECP - P) * P_SECP  # exclusive bound on a CRT accumulator: keeps Q < n_s
 WORD_MAX = 2**256 - 1
-
-
-def to_mont(x: int) -> int:
-    return x * R % P
-
-
-def from_mont(X: int) -> int:
-    return X * R_INV % P
 
 
 def crt_of(v: int) -> tuple[int, int]:
     """CRT residues of an integer."""
     return v % P_SECP, v % N_SECP
+
+
+class Field:
+    """The constants of the arithmetic modulo an odd prime q below 2^254: BN254's base field p (FP), or its
+    scalar field r (FR, for the fflonk verifier).  The method is the same for both; only the constants
+    differ."""
+
+    def __init__(self, q: int) -> None:
+        ensure(q % 2 == 1 and q < 2**254, 'an odd prime below 2^254')
+        self.P = q
+        self.R_MOD_P = R % q
+        self.R_INV = pow(R, -1, q)
+        self.C1 = (-pow(q, -1, P_SECP)) % P_SECP  # -q^-1 mod p_s
+        self.C2 = q % N_SECP
+        self.C23 = self.C2 * C3 % N_SECP  # q p_s^-1 mod n_s
+        self.CRT_MAX = (N_SECP - q) * P_SECP  # exclusive bound on a CRT accumulator: keeps Q < n_s
+
+    def to_mont(self, x: int) -> int:
+        return x * R % self.P
+
+    def from_mont(self, X: int) -> int:
+        return X * self.R_INV % self.P
+
+    def mult_at_least(self, hi: int) -> int:
+        """The smallest multiple of q that is >= hi."""
+        return ((hi + self.P - 1) // self.P) * self.P
+
+
+FP = Field(bn254.P)
+FR = Field(bn254.R)
+# the base field's constants, as the rest of the generator uses them
+P = FP.P
+R_MOD_P, R_INV, C1, C2, C23, CRT_MAX = FP.R_MOD_P, FP.R_INV, FP.C1, FP.C2, FP.C23, FP.CRT_MAX
+to_mont, from_mont = FP.to_mont, FP.from_mont
 
 
 class Val:
@@ -75,19 +94,22 @@ class Crt:
 
 def mult_of_p_at_least(hi: int) -> int:
     """The smallest multiple of p that is >= hi."""
-    return ((hi + P - 1) // P) * P
+    return FP.mult_at_least(hi)
 
 
 class Fp:
-    """Field operations over a backend (sym.Sym for expressions, sym.Num for numbers)."""
+    """Field operations over a backend (sym.Sym for expressions, sym.Num for numbers), modulo the prime of
+    `field`: p by default, or r (FR)."""
 
-    def __init__(self, be: Backend) -> None:
+    def __init__(self, be: Backend, field: Field = FP) -> None:
         self.be = be
+        self.F = field
+        self.P = field.P
 
     # constants and inputs
     def const(self, x: int) -> Val:
         """The field constant x (an integer mod p), in Montgomery form."""
-        v = to_mont(x)
+        v = self.F.to_mont(x)
         return Val(self.be.word(v), v)
 
     def raw(self, e: Term, hi: int = WORD_MAX) -> Val:
@@ -115,7 +137,7 @@ class Fp:
     def crt_neg(self, x: Crt) -> Crt:
         """c - x for the smallest multiple c of p with c >= hi(x); bound c."""
         be = self.be
-        c = mult_of_p_at_least(x.hi)
+        c = self.F.mult_at_least(x.hi)
         cp, cn = crt_of(c)
         return Crt(be.fe_add(be.fe_neg(x.sp), be.word(cp)), be.sc_add(be.sc_neg(x.sn), be.word(cn)), c)
 
@@ -124,15 +146,15 @@ class Fp:
         (a, a) uses the squaring jets."""
         be = self.be
         hi = sum(a.hi * b.hi for a, b in pairs)
-        ensure(hi < CRT_MAX, 'CRT accumulator bound exceeded')
+        ensure(hi < self.F.CRT_MAX, 'CRT accumulator bound exceeded')
         packed = be.crt_dot([(a.e, None if a is b else b.e) for a, b in pairs])
-        out_hi = (hi + (P_SECP - 1) * P) // P_SECP
+        out_hi = (hi + (P_SECP - 1) * self.P) // P_SECP
         ensure(out_hi < N_SECP, 'reduced bound exceeds n_s')
 
         def body(acc):
             sp, sn = acc
-            m = be.fe_mul(sp, be.word(C1))
-            return be.sc_mul(be.sc_add(sn, be.sc_mul(m, be.word(C2))), be.word(C3))
+            m = be.fe_mul(sp, be.word(self.F.C1))
+            return be.sc_mul(be.sc_add(sn, be.sc_mul(m, be.word(self.F.C2))), be.word(C3))
 
         q = be.with_env(packed, [E('', 256, 0), E('', 256, 0)], body)
         return Val(be.check(q, out_hi), out_hi)
@@ -141,29 +163,29 @@ class Fp:
         """Sum of k_i x_i for field constants k_i (any sign, taken mod p).  The constants are folded into
         the reduction, as in mul_const: two jets per term plus two."""
         be = self.be
-        hi = sum(x.hi * to_mont(k % P) for x, k in terms)
-        ensure(hi < CRT_MAX, 'CRT accumulator bound exceeded')
-        out_hi = (hi + (P_SECP - 1) * P) // P_SECP
+        hi = sum(x.hi * self.F.to_mont(k % self.P) for x, k in terms)
+        ensure(hi < self.F.CRT_MAX, 'CRT accumulator bound exceeded')
+        out_hi = (hi + (P_SECP - 1) * self.P) // P_SECP
         ensure(out_hi < N_SECP, 'reduced bound exceeds n_s')
 
         def body(xs):
             fe_terms, sc_terms = [], []
             for x, (_, k) in zip(xs, terms):
-                c = to_mont(k % P)
-                fe_terms.append(be.fe_mul(x.e, be.word(c * C1 % P_SECP)))
+                c = self.F.to_mont(k % self.P)
+                fe_terms.append(be.fe_mul(x.e, be.word(c * self.F.C1 % P_SECP)))
                 sc_terms.append(be.sc_mul(x.e, be.word(c * C3 % N_SECP)))
             m = pairwise_sum(fe_terms, be.fe_add)
             s = pairwise_sum(sc_terms, be.sc_add)
-            return be.sc_add(s, be.sc_mul(m, be.word(C23)))
+            return be.sc_add(s, be.sc_mul(m, be.word(self.F.C23)))
 
         return Val(be.check(self.once([x for x, _ in terms], body), out_hi), out_hi)
 
     def reduce(self, x: Crt) -> Val:
         """Montgomery reduction of a CRT value: Q = (x + m p) / p_s = x R^-1 (mod p)."""
         be = self.be
-        m = be.fe_mul(x.sp, be.word(C1))
-        q = be.sc_mul(be.sc_add(x.sn, be.sc_mul(m, be.word(C2))), be.word(C3))
-        hi = (x.hi + (P_SECP - 1) * P) // P_SECP
+        m = be.fe_mul(x.sp, be.word(self.F.C1))
+        q = be.sc_mul(be.sc_add(x.sn, be.sc_mul(m, be.word(self.F.C2))), be.word(C3))
+        hi = (x.hi + (P_SECP - 1) * self.P) // P_SECP
         ensure(hi < N_SECP, 'reduced bound exceeds n_s')
         return Val(be.check(q, hi), hi)
 
@@ -181,14 +203,14 @@ class Fp:
     def mul_const(self, a: Val, x: int) -> Val:
         """a times the field constant x.  The constant is folded into the reduction: 4 jets instead of 6."""
         be = self.be
-        c = to_mont(x)
-        hi = (a.hi * c + (P_SECP - 1) * P) // P_SECP
+        c = self.F.to_mont(x)
+        hi = (a.hi * c + (P_SECP - 1) * self.P) // P_SECP
         ensure(hi < N_SECP, 'reduced bound exceeds n_s')
 
         def body(v):
             a = v[0]
-            m = be.fe_mul(a.e, be.word(c * C1 % P_SECP))  # (a c mod p_s) C1
-            return be.sc_add(be.sc_mul(a.e, be.word(c * C3 % N_SECP)), be.sc_mul(m, be.word(C23)))
+            m = be.fe_mul(a.e, be.word(c * self.F.C1 % P_SECP))  # (a c mod p_s) C1
+            return be.sc_add(be.sc_mul(a.e, be.word(c * C3 % N_SECP)), be.sc_mul(m, be.word(self.F.C23)))
 
         return Val(be.check(self.once([a], body), hi), hi)
 
@@ -208,7 +230,7 @@ class Fp:
 
     def neg(self, a: Val) -> Val:
         """c - a for the smallest multiple c of p with c >= hi(a), so the result is non-negative; bound c."""
-        c = mult_of_p_at_least(a.hi)
+        c = self.F.mult_at_least(a.hi)
         ensure(c < P_SECP, 'negation constant exceeds p_s')
         be = self.be
         return Val(be.check(be.fe_add(be.fe_neg(a.e), be.word(c)), c), c)
@@ -226,11 +248,11 @@ class Fp:
 
     def to_mont(self, a: Val) -> Val:
         """Plain integer word -> Montgomery form: a (R^2 mod p) R^-1 = a R."""
-        return self.mul_const(a, R_MOD_P)
+        return self.mul_const(a, self.F.R_MOD_P)
 
     def from_mont(self, a: Val) -> Val:
         """Montgomery form -> plain word: a 1 R^-1; bound p + hi / p_s."""
-        return self.mul_const(a, R_INV)
+        return self.mul_const(a, self.F.R_INV)
 
     # Environments: let/scope take nested structures of Val and Crt (a Crt is two words); the body gets
     # the same structure made of accessors.
@@ -284,10 +306,10 @@ class Fp:
     def assert_eq_const(self, a: Val, x: int) -> Term:
         """Verify a = x (a field constant) for a value below 2p: the word is X or X + p."""
         be = self.be
-        v = to_mont(x)
-        ensure(a.hi < 2 * P, 'assert_eq_const needs a bound below 2p')
+        v = self.F.to_mont(x)
+        ensure(a.hi < 2 * self.P, 'assert_eq_const needs a bound below 2p')
         return self.once(
-            [a], lambda w: be.verify(be.or1(be.eq256(w[0].e, be.word(v)), be.eq256(w[0].e, be.word(v + P))))
+            [a], lambda w: be.verify(be.or1(be.eq256(w[0].e, be.word(v)), be.eq256(w[0].e, be.word(v + self.P))))
         )
 
     def assert_eq_word(self, a: Val, v: int) -> Term:

@@ -19,7 +19,7 @@ from typing import Any
 
 from . import bn254
 from .dsl import ensure
-from .fp import P_SECP, Fp, P, Val, mult_of_p_at_least
+from .fp import P_SECP, Fp, Val
 from .sym import E, Term, is_sym
 
 Val2 = tuple[Val, Val]  # an F_p2 element (a0, a1) = a0 + a1 u
@@ -162,7 +162,8 @@ class Curve:
         be = self.be
 
         def body(v):
-            cands = [be.eq256(v[0].e, be.word(i * P)) for i in range(d.hi // P + 1)]
+            q = self.fp.P  # p, or r for an Fp over FR
+            cands = [be.eq256(v[0].e, be.word(i * q)) for i in range(d.hi // q + 1)]
             acc = cands[0]
             for c in cands[1:]:
                 acc = be.or1(acc, c)
@@ -175,9 +176,9 @@ class Curve:
 
     def is_eq_flag(self, a: Val, b: Val) -> Term:
         fp = self.fp
-        if a.hi + mult_of_p_at_least(b.hi) >= P_SECP:
+        if a.hi + fp.F.mult_at_least(b.hi) >= P_SECP:
             a = fp.normalize(a)
-        if a.hi + mult_of_p_at_least(b.hi) >= P_SECP:
+        if a.hi + fp.F.mult_at_least(b.hi) >= P_SECP:
             b = fp.normalize(b)
         return self.is_zero_flag(fp.sub(a, b))
 

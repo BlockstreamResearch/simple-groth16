@@ -1,6 +1,6 @@
 # Examples
 
-The verifier is generated from a verifying key, so there is no single Simplicity file to read: the key's points are the program's constants. This directory keeps two generated programs, a small one and the one spent on Liquid testnet.
+The verifier is generated from a verifying key, so there is no single Simplicity file to read: the key's points are the program's constants. This directory keeps two generated programs, a small one and the one spent on Liquid testnet, and the fflonk verifier's test proofs.
 
 ## fp_mul.simpl
 
@@ -31,3 +31,15 @@ The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending tr
 `tools/groth16_snarkjs.py` regenerates the program and the witness from the key, the proof and the leaves byte for byte; docs/benchmarks.md has the commands. The output had no key path: its internal key is BIP341's unspendable point.
 
 The verifier spent on Liquid testnet ([`f25a6e90…`](https://blockstream.info/liquidtestnet/tx/f25a6e90417c427f25c1d6883869825f30ec111a357b0e550bf24a20725d3cdb)) was an earlier version of this program: the Miller loop computed in the tower, without the G2 membership check.
+
+## fflonk/
+
+The fixtures of `tests/test_fflonk.py`: the snarkjs 0.7.6 fflonk key of `circuits/multiplier_fflonk.circom` and proofs of c = 21 for the harness's dummy sighash.
+
+| file | |
+|---|---|
+| `verification_key.json` | the snarkjs key (universal setup: no ceremony of its own) |
+| `public.json` | the public signals: the sighash as two limbs, then c |
+| `proof_keccak.json` | a proof from snarkjs as it is (Keccak-256 transcript) |
+| `proof_sha256.json` | a proof from `tools/snarkjs_sha256.mjs` (SHA-256 transcript) |
+| `proof_keccak_other_sighash.json`, `public_other_sighash.json` | a valid proof for another sighash, which the bound program must reject |

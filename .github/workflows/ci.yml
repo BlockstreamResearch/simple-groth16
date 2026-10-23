@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        layer: [fp, poly, curve, pairing, g2_check, binding, groth16, inputs2, inputs, invariants, tools, keccak, msm]
+        layer: [fp, poly, curve, pairing, g2_check, binding, groth16, inputs2, inputs, invariants, tools, keccak, msm, fflonk_keccak, fflonk_sha256]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

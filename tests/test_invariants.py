@@ -118,6 +118,8 @@ def main():
     # a binding needs the one-signal convention
     vk2, _, _ = B.groth16_instance(2, seed=7)
     refused(lambda: Groth16(F.Fp(Sym(0)), vk2, depth=1), 'one public signal')
+    # one binding at a time: by the tree, or by the first input
+    refused(lambda: Groth16(F.Fp(Sym(0)), vk, depth=1, sighash_input=True), 'one binding')
     print('all ok')
 
 

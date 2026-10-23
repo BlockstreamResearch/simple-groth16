@@ -84,6 +84,8 @@ def chain(
 
         return fp.scope(vals, inner)
 
+    n_checks = [sum(1 for k in ctx if k.startswith('_chk'))]
+
     def go(ctx, steps):
         if not steps:
             checks = [v for k, v in ctx.items() if k.startswith('_chk')]
@@ -117,8 +119,9 @@ def chain(
             res = fn(ctx)
             res = res if isinstance(res, list) else [res]
             ctx2 = dict(ctx)
-            for v in res:
-                ctx2[f'_chk{len([k for k in ctx2 if k.startswith("_chk")])}'] = v
+            for v in res:  # a counter, not a count of the keys: a check is never overwritten
+                ctx2[f'_chk{n_checks[0]}'] = v
+                n_checks[0] += 1
             return go(ctx2, rest)
         if kind == 'drop':
             _, names = step

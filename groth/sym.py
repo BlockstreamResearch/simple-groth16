@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from .dsl import Emitter, balanced, balanced_paths, ensure, pairwise_sum
+from .dsl import CheckFailed, Emitter, balanced, balanced_paths, ensure, pairwise_sum
 
 # jet costs (mWU), as in rust-simplicity 0.9 and Elements 23.3; add a jet here before using it
 JET_COST = {
@@ -413,21 +413,38 @@ class Sym:
 
     def split(self, e: E, shape: Shape) -> Any:
         """Accessors, nested like `shape`, for the components of a projected value."""
-        assert e.path is not None, 'split of a computed value'
+        if e.path is None:
+            raise CheckFailed('split of a computed value')
+        ensure(sum(x.w for x in flat(shape)) == e.w, 'split into components of another width')
         return self._unpack(e.path, shape)
 
     def subtree(self, leaves: Any) -> E:
-        """Projection of the smallest subtree holding the (nested) projected leaves."""
+        """Projection of the smallest subtree holding the (nested) projected leaves, which must be all of
+        its leaves, in order."""
         leaves = flat(leaves)
+        ensure(all(a.path is not None for a in leaves), 'subtree of a computed value')
         pre = leaves[0].path
         for a in leaves[1:]:
             while not a.path.startswith(pre):
                 pre = pre[:-1]
+        paths = [a.path for a in leaves]
+        ensure(len(paths) == len(set(paths)) and _partition(pre, set(paths)), 'not a whole subtree')
+        # in the subtree's order (O before I), as the numeric backend takes them
+        ensure(paths == sorted(paths, key=lambda p: p.replace('O', '0').replace('I', '1')), 'leaves out of order')
         return self.proj(pre + 'H', sum(a.w for a in leaves))
 
     def seq(self, chk: E, e: E) -> E:
         """Run a unit-typed check, then return e: comp (pair chk e) (drop iden)."""
         return self.comp(self.pair(chk, e), E('drop (iden)', e.w, 200 + e.w))
+
+
+def _partition(pre: str, paths: set[str]) -> bool:
+    """The paths are exactly the leaves of a subtree at pre: pre itself, or a partition of both halves."""
+    if pre in paths:
+        return not any(p != pre and p.startswith(pre) for p in paths)
+    if not any(p.startswith(pre) for p in paths):
+        return False
+    return _partition(pre + 'O', paths) and _partition(pre + 'I', paths)
 
 
 class Num:

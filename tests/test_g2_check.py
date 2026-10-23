@@ -25,7 +25,7 @@ from groth import bn254 as B
 from groth import pairing as PC
 from groth import poly
 
-COFACTOR_PRIMES = [10069, 5864401, 1875725156269, 197620364512881247228717050342013327560683201906968909]
+COFACTOR_PRIMES = list(PC.COFACTOR_PRIMES)
 
 
 def check_kernel(rng):
@@ -84,10 +84,12 @@ def check_additions(rng):
     """No addition of the loop meets T = Q, whatever the point B of the twist.  The group is cyclic, so on
     its part of prime order l, T = [k] B and Q = [q] B with q = 1, -1 (B, -B), or mu, -mu^2 for the
     Frobenius additions (psi(B), -psi^2(B)); T = Q needs l | k - q for some prime l of the group order,
-    which happens for none.  (T = -Q fails the slope relation: 0 = 2 yQ.)"""
+    which happens for none.  (T = -Q fails the slope relation: 0 = 2 yQ.)  The generator checks this with
+    pairing.additions_avoid_q and the eigenvalues pairing.PSI_EIGEN, which are derived here."""
     assert B.g2_frobenius(B.G2_GEN) == B.g2_mul(B.G2_GEN, B.P % B.R)
     mus = {l: eigenvalue(rng, l) for l in COFACTOR_PRIMES}
     mus[B.R] = B.P % B.R
+    assert mus == PC.PSI_EIGEN, 'the eigenvalues of psi'
     k = 1
     for kind in PC.STEPS:
         if kind == 'D':
@@ -99,6 +101,12 @@ def check_additions(rng):
     assert k == 6 * B.X + 2
     for l, mu in mus.items():
         assert (k - mu) % l and (k + mu + mu * mu) % l, l
+    assert PC.additions_avoid_q(PC.STEPS)
+    # and the generator's check refuses loops that break it: an addition at T = B, a loop that does not
+    # reach 6x + 2, a Frobenius addition in the middle
+    assert not PC.additions_avoid_q(['A+', 'F1', 'F2'])
+    assert not PC.additions_avoid_q(PC.STEPS[1:])
+    assert not PC.additions_avoid_q(['F1'] + PC.STEPS[:-1])
     print('no addition meets T = Q')
 
 
@@ -139,7 +147,7 @@ def main():
             assert r['cost'] == estimate, (r['cost'], estimate)
             print(f'{label:24} accepted')
         else:
-            assert not r.get('ok') and r.get('stage') in ('exec', 'finalize'), (label, r)
+            harness.expect_rejected(r, label)
             print(f'{label:24} rejected: only its two G2 relations fail')
     print('all ok')
 

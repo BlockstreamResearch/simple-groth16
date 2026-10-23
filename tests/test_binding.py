@@ -55,7 +55,7 @@ def main():
     r = harness.expect_ok(results[0], 'binding')
     assert r['cost'] == estimate, (r['cost'], estimate)
     for bad, label in zip(results[1:], ('wrong sibling', 'other sighash')):
-        assert not bad.get('ok') and bad.get('stage') in ('exec', 'finalize'), (label, bad)
+        harness.expect_rejected(bad, label)
         print(f'{label:15} rejected as expected')
     print(
         f'bound verifier (depth {depth}) cost {r["cost"]:,} mWU, binding {g.parts["binding"]:,} mWU, '

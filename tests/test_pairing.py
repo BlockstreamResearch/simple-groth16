@@ -3,8 +3,9 @@
 e(A, B) e(L, gamma) e(C, delta) e(alpha, beta) = 1, L = IC_0 + x IC_1 for a public input x.  The model's
 S(z) must equal Q(z) M(z), the program must accept, and it must reject witnesses that are wrong in one
 place but sealed consistently (r, Q and z recomputed), so that only the identity can catch them: a wrong
-slope, a wrong Miller value, a wrong residue witness, a wrong public input.  A wrong challenge and a
-false instance must be rejected too.
+slope, a wrong Miller value, a wrong residue witness, a wrong public input.  A wrong challenge (r or z), a
+word changed to another encoding of its value without sealing again, and a false instance must be rejected
+too.
 
     python3 tests/test_pairing.py
 """
@@ -114,6 +115,15 @@ def main():
     wrong_r = dict(w)
     wrong_r['r'] ^= 1
     bad.append(('challenge', [x], wrong_r))
+    wrong_z = dict(w)
+    wrong_z['z'] ^= 1
+    bad.append(('second challenge', [x], wrong_z))
+    # the same point word plus 4p (another encoding of the same value) without sealing again: r covers
+    # the raw words, so the challenge must reject it
+    reencoded = dict(w)
+    reencoded['points'] = [w['points'][0] + 4 * P] + w['points'][1:]
+    assert reencoded['points'][0] < 2**256
+    bad.append(('re-encoded word', [x], reencoded))
     # numeric model
     b = PC.bounds()
     pcn = PC.PairingCheck(F.Fp(Num()), delta, const, gt, b)
@@ -134,7 +144,7 @@ def main():
     ok = harness.expect_ok(res[0], 'pairing check')
     assert ok['cost'] == estimate, (ok['cost'], estimate)
     for (how, _, _), rb in zip(bad, res[1:]):
-        assert not rb.get('ok') and rb.get('stage') in ('exec', 'finalize'), (how, rb)
+        harness.expect_rejected(rb, how)
         print(f'wrong {how:15} rejected')
     print(
         f'pairing check cost {ok["cost"]:,}: setup {pc.parts["setup"]:,}, loop {pc.parts["loop"]:,}, final {pc.parts["final"]:,}'

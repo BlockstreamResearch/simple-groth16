@@ -212,6 +212,8 @@ The public inputs enter through the inputs' term of the pairing check (above): t
 
 To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, merkle.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 15 k mWU and the circuit about 59 k constraints per hashed node.
 
+A key compiled with `--unbound` has none of this. Its public inputs are whatever the spender proves, so the statement's constants must be fixed in the circuit, and a broadcast witness can be reused in any transaction to the same output. `tools/groth16_snarkjs.py` therefore binds unless `--unbound` is given, also for `PublicMerkleRoot(0)`, whose tree holds only the sighash.
+
 ## Budget
 
 The program costs 48.6 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 34 kB program and the 18 kB witness already earn about 52.7 M mWU: the verifier needs no padding, and the transaction weighs about 53 kWU. More public inputs keep it that way, since each one adds more bytes (its tables, about 14 kB) than cost (about 6.6 M mWU). `tests/test_groth16.py` checks that the budget covers the cost, and `deploy spend` reports it for a real transaction.

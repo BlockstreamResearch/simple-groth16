@@ -4,9 +4,9 @@ HARNESS := tools/harness
 E := examples/multiplier
 # the tests that run programs through the harness (inputs2: the verifier of a key with two public inputs)
 HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2
-# and the plain-Python ones: poly, inputs (keys with 3 to 5 public inputs), and bn254_ref, which checks the
-# reference against py_ecc
-TESTS := $(HARNESS_TESTS) poly inputs
+# and the plain-Python ones: poly, inputs (keys with 3 to 5 public inputs), tools (what the command-line
+# tools refuse), and bn254_ref, which checks the reference against py_ecc
+TESTS := $(HARNESS_TESTS) poly inputs tools
 
 .PHONY: help harness test $(addprefix test-,$(TESTS)) test-bn254_ref bench example lint fmt
 
@@ -30,7 +30,7 @@ $(addprefix test-,$(filter-out inputs2,$(HARNESS_TESTS))): test-%: harness
 test-inputs2: harness
 	INPUTS=2 $(PYTHON) tests/test_groth16.py
 
-test-poly test-inputs test-bn254_ref: test-%:
+test-poly test-inputs test-tools test-bn254_ref: test-%:
 	$(PYTHON) tests/test_$*.py
 
 bench: harness

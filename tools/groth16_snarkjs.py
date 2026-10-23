@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Verifier program from a snarkjs verification key, and witness from a snarkjs proof.
 
-    python3 tools/groth16_snarkjs.py program verification_key.json --out build/x [--values N]
-    python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public.json --out build/x [--leaves leaves.json]
+    python3 tools/groth16_snarkjs.py program verification_key.json --values N --out build/x
+    python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public.json --leaves leaves.json --out build/x
 
 `program` writes x.simpl (then `deploy compile` makes x.uprog and `deploy address` the output to fund).
 `witness` writes x.w0.json for `deploy spend`; it verifies the proof first.
 
---values N: the circuit follows circuits/public_merkle.circom, so its one public signal is the Merkle
-root of the sighash and N values, and the proof is bound to the spending transaction.  The witness then
-needs --leaves, a JSON file {"sighash": "<64 hex digits>", "values": ["<decimal>", ...]}.  Without
---values, every public signal is a verifier input (about 6.6 M mWU and 14 kB each) and nothing binds the
-transaction.
+--values N (N >= 0): the circuit follows circuits/public_merkle.circom with PublicMerkleRoot(N), so its
+one public signal is the Merkle root of the sighash and N values, and the program binds the proof to the
+spending transaction.  The witness needs --leaves, a JSON file {"sighash": "<64 hex digits>", "values":
+["<decimal>", ...]}, which also gives N.
+
+--unbound (in place of --values and --leaves): every public signal is a verifier input (about 6.6 M mWU
+and 14 kB each).  Nothing binds the transaction: anyone who sees a spend can reuse its witness in another
+transaction to the same output, and the public inputs are whatever the spender proves.
 """
 
 import argparse
@@ -29,24 +32,30 @@ from groth.groth16 import Groth16
 from groth.sym import Num
 
 
+def need(ok, msg):
+    """Refuse with msg unless ok.  Not an assert, so python -O keeps the check."""
+    if not ok:
+        sys.exit(f'groth16_snarkjs.py: {msg}')
+
+
 def g1(pt):
     x, y, z = (int(v) for v in pt)
-    assert z != 0, 'point at infinity'
+    need(z != 0, 'point at infinity')
     if z != 1:
         zi = pow(z, -1, B.P)
         x, y = x * zi % B.P, y * zi % B.P
-    assert B.g1_on_curve(x, y), 'G1 point not on the curve'
+    need(B.g1_on_curve(x, y), 'G1 point not on the curve')
     return (x, y)
 
 
 def g2(pt):
     x, y, z = (B.Fp2(int(v[0]), int(v[1])) for v in pt)
-    assert not z.is_zero(), 'point at infinity'
+    need(not z.is_zero(), 'point at infinity')
     if z != B.Fp2(1):
         zi = z.inv()
         x, y = x * zi, y * zi
-    assert B.g2_on_curve(x, y), 'G2 point not on the twist'
-    assert B.g2_in_subgroup((x, y)), 'G2 point not in the order-r subgroup'
+    need(B.g2_on_curve(x, y), 'G2 point not on the twist')
+    need(B.g2_in_subgroup((x, y)), 'G2 point not in the order-r subgroup')
     return (x, y)
 
 
@@ -57,7 +66,7 @@ def load_json(path):
 
 def load_vk(path):
     j = load_json(path)
-    assert j.get('protocol') == 'groth16' and j.get('curve') in ('bn128', 'bn254'), 'a snarkjs groth16/bn128 key'
+    need(j.get('protocol') == 'groth16' and j.get('curve') in ('bn128', 'bn254'), 'not a snarkjs groth16/bn128 key')
     vk = {
         'alpha': g1(j['vk_alpha_1']),
         'beta': g2(j['vk_beta_2']),
@@ -65,68 +74,89 @@ def load_vk(path):
         'delta': g2(j['vk_delta_2']),
         'ic': [g1(p) for p in j['IC']],
     }
-    assert len(vk['ic']) == j['nPublic'] + 1
+    need(len(vk['ic']) == j.get('nPublic', -1) + 1, 'the key has IC points for a different number of public signals')
     return vk
 
 
 def load_proof(path):
     j = load_json(path)
-    assert j.get('protocol') == 'groth16' and j.get('curve') in ('bn128', 'bn254'), 'a snarkjs groth16/bn128 proof'
+    need(j.get('protocol') == 'groth16' and j.get('curve') in ('bn128', 'bn254'), 'not a snarkjs groth16/bn128 proof')
     return (g1(j['pi_a']), g2(j['pi_b']), g1(j['pi_c']))
 
 
 def load_public(path):
-    return [int(v) for v in load_json(path)]
+    inputs = [int(v) for v in load_json(path)]
+    need(all(0 <= v < B.R for v in inputs), 'a public signal is not below r')
+    return inputs
 
 
 def load_leaves(path):
     j = load_json(path)
-    return bytes.fromhex(j['sighash']), [int(v) for v in j['values']]
+    sighash = bytes.fromhex(j['sighash'])
+    need(len(sighash) == 32, 'the sighash is 32 bytes (64 hex digits)')
+    values = [int(v) for v in j['values']]
+    need(all(0 <= v < B.R for v in values), 'a value is not below r')
+    return sighash, values
 
 
-def main():
+def binding_depth(n, n_values, leaf_values, unbound):
+    """The depth of the public-signal tree: merkle.depth_of(N + 1) for a bound circuit with N values
+    (--values N, or the values of --leaves), 0 only with an explicit --unbound."""
+    if leaf_values is not None:
+        need(
+            n_values is None or n_values == len(leaf_values),
+            f'--values {n_values} but the leaves have {len(leaf_values)} values',
+        )
+        n_values = len(leaf_values)
+    bound = n_values is not None
+    need(bound != unbound, 'give --values N (or --leaves) for a bound circuit, or --unbound')
+    if not bound:
+        return 0
+    need(n_values >= 0, '--values is at least 0')
+    need(n == 1, f'a bound circuit has one public signal, the key has {n}')
+    return merkle.depth_of(n_values + 1)
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('command', choices=['program', 'witness'])
     ap.add_argument('files', nargs='+', help='verification_key.json [proof.json public.json]')
     ap.add_argument('--out', required=True)
-    ap.add_argument(
-        '--values', type=int, default=0, help='public values of the circuit behind the Merkle root (0: no binding)'
-    )
-    ap.add_argument('--leaves', help='the leaves of the proof (witness with --values)')
-    a = ap.parse_args()
+    ap.add_argument('--values', type=int, help='N: the circuit uses PublicMerkleRoot(N) (bound to the transaction)')
+    ap.add_argument('--leaves', help='leaves.json, the leaves of the proof (witness of a bound circuit)')
+    ap.add_argument('--unbound', action='store_true', help='no transaction binding: every public signal is an input')
+    a = ap.parse_args(argv)
     vk = load_vk(a.files[0])
     n = len(vk['ic']) - 1
-    if a.leaves:
-        sighash, values = load_leaves(a.leaves)
-        a.values = len(values)
-    depth = merkle.depth_of(a.values + 1) if a.values else 0
-    if depth:
-        assert n == 1, f'a bound circuit has one public signal, the key has {n}'
+    sighash, values = load_leaves(a.leaves) if a.leaves else (None, None)
+    depth = binding_depth(n, a.values, values, a.unbound)
     t0 = time.time()
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     if a.command == 'program':
         text, g, cost = Groth16.compile(vk, depth)
         with open(a.out + '.simpl', 'w') as f:
             f.write(text)
-        binding = f'bound to the transaction (tree depth {depth})' if depth else 'no transaction binding'
+        binding = (
+            f'bound to the transaction (tree depth {depth})' if depth else 'NOT bound to the transaction (--unbound)'
+        )
         print(
             f'wrote {a.out}.simpl: {n} public input{"s" if n > 1 else ""}, {binding}, '
             f'cost bound {cost:,} mWU ({time.time() - t0:.0f}s)'
         )
         return
-    assert len(a.files) == 3, 'witness needs verification_key.json proof.json public.json'
+    need(len(a.files) == 3, 'witness needs verification_key.json proof.json public.json')
     proof, inputs = load_proof(a.files[1]), load_public(a.files[2])
-    assert len(inputs) == n, 'public signals'
-    assert B.groth16_verify(vk, proof, inputs), 'the proof does not verify'
+    need(len(inputs) == n, f'public.json has {len(inputs)} signals, the key {n}')
+    need(B.groth16_verify(vk, proof, inputs), 'the proof does not verify')
     g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth)
     if depth:
-        assert a.leaves, '--leaves is needed for a bound circuit'
+        need(bool(a.leaves), '--leaves is needed for a bound circuit')
         sibs = merkle.siblings([sighash] + values)
-        assert Groth16.root(sighash, sibs) == inputs[0], 'the leaves do not give the public signal'
+        need(Groth16.root(sighash, sibs) == inputs[0], 'the leaves do not give the public signal')
         wit = g.witness(proof, inputs, sighash, sibs)
     else:
         wit = g.witness(proof, inputs)
-    assert wit is not None
+    need(wit is not None, 'no witness for this proof')
     g.verify(g.num_input(wit))
     with open(a.out + '.w0.json', 'w') as f:
         json.dump(g.witness_value(wit), f)

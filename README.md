@@ -106,7 +106,9 @@ python3 tools/groth16_snarkjs.py program verification_key.json --values n --out 
 python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public.json --leaves leaves.json --out build/x
 ```
 
-`leaves.json` is `{"sighash": "<64 hex digits>", "values": ["<decimal>", ...]}`, with the sighash from `deploy sighash` and the values in circuit order. Without `--values`, each public signal becomes a verifier input (about 6.6 M mWU and 14 kB each) and nothing binds the proof to the transaction.
+`leaves.json` is `{"sighash": "<64 hex digits>", "values": ["<decimal>", ...]}`, with the sighash from `deploy sighash` and the values in circuit order. `n` may be 0 (`PublicMerkleRoot(0)`, a tree that holds only the sighash).
+
+A circuit that does not follow this convention needs `--unbound` in place of `--values` and `--leaves`. Then each public signal becomes a verifier input (about 6.6 M mWU and 14 kB each), and nothing binds the proof to the transaction: anyone who sees the spend can reuse its witness in another transaction to the same output. The spender also chooses the public inputs, so the statement's constants must be fixed in the circuit.
 
 The program sees only the root, not the values behind it. A contract that must act on a value, say an address the proof commits to, would have to open that leaf as well; the generator does not do that yet.
 

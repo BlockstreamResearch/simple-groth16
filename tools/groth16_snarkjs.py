@@ -3,6 +3,7 @@
 
     python3 tools/groth16_snarkjs.py program verification_key.json --values N --out build/x
     python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public.json --leaves leaves.json --out build/x
+    python3 tools/groth16_snarkjs.py program|witness ... --sighash-input [--sighash <64 hex digits>] --out build/x
 
 `program` writes x.simpl (then `deploy compile` makes x.uprog and `deploy address` the output to fund).
 `witness` writes x.w0.json for `deploy spend`; it verifies the proof first.
@@ -12,7 +13,14 @@ one public signal is the Merkle root of the sighash and N values, and the progra
 spending transaction.  The witness needs --leaves, a JSON file {"sighash": "<64 hex digits>", "values":
 ["<decimal>", ...]}, which also gives N.
 
---unbound (in place of --values and --leaves): every public signal is a verifier input (about 6.6 M mWU
+--sighash-input (in place of --values and --leaves): the circuit's first public signal is the sighash of
+the spending transaction with its top three bits cleared (merkle.public_signal, as for a root), which the
+program compares with the transaction's, and every public signal is a verifier input (about 6.6 M mWU and
+14 kB each).  For circuits that cannot compute the Merkle root, such as Noir circuits converted to R1CS
+(tools/noir_r1cs.py, circuits/noir/multiplier).  `witness` needs the sighash itself (--sighash), since
+the signal lacks its top three bits.
+
+--unbound (in place of the others): every public signal is a verifier input (about 6.6 M mWU
 and 14 kB each).  Nothing binds the transaction: anyone who sees a spend can reuse its witness in another
 transaction to the same output, and the public inputs are whatever the spender proves.
 """
@@ -109,7 +117,7 @@ def binding_depth(n, n_values, leaf_values, unbound):
         )
         n_values = len(leaf_values)
     bound = n_values is not None
-    need(bound != unbound, 'give --values N (or --leaves) for a bound circuit, or --unbound')
+    need(bound != unbound, 'give --values N (or --leaves) or --sighash-input for a bound circuit, or --unbound')
     if not bound:
         return 0
     need(n_values >= 0, '--values is at least 0')
@@ -125,20 +133,36 @@ def main(argv=None):
     ap.add_argument('--values', type=int, help='N: the circuit uses PublicMerkleRoot(N) (bound to the transaction)')
     ap.add_argument('--leaves', help='leaves.json, the leaves of the proof (witness of a bound circuit)')
     ap.add_argument('--unbound', action='store_true', help='no transaction binding: every public signal is an input')
+    ap.add_argument('--sighash-input', action='store_true', help='bound by the first public signal, the sighash')
+    ap.add_argument('--sighash', help="witness with --sighash-input: the transaction's sighash, 64 hex digits")
     a = ap.parse_args(argv)
     vk = load_vk(a.files[0])
     n = len(vk['ic']) - 1
-    sighash, values = load_leaves(a.leaves) if a.leaves else (None, None)
-    depth = binding_depth(n, a.values, values, a.unbound)
+    by_input = a.sighash_input
+    need(by_input or a.sighash is None, '--sighash goes with --sighash-input')
+    if by_input:
+        alone = a.values is None and not a.leaves and not a.unbound
+        need(alone, '--sighash-input goes alone: no --values, --leaves or --unbound')
+        sighash, values, depth = None, None, 0
+        if a.command == 'witness':
+            need(a.sighash is not None, 'witness with --sighash-input needs --sighash')
+            sighash = bytes.fromhex(a.sighash)
+            need(len(sighash) == 32, 'the sighash is 32 bytes (64 hex digits)')
+    else:
+        sighash, values = load_leaves(a.leaves) if a.leaves else (None, None)
+        depth = binding_depth(n, a.values, values, a.unbound)
     t0 = time.time()
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     if a.command == 'program':
-        text, g, cost = Groth16.compile(vk, depth)
+        text, g, cost = Groth16.compile(vk, depth, sighash_input=by_input)
         with open(a.out + '.simpl', 'w') as f:
             f.write(text)
-        binding = (
-            f'bound to the transaction (tree depth {depth})' if depth else 'NOT bound to the transaction (--unbound)'
-        )
+        if by_input:
+            binding = 'bound to the transaction (the first public signal is the sighash)'
+        elif depth:
+            binding = f'bound to the transaction (tree depth {depth})'
+        else:
+            binding = 'NOT bound to the transaction (--unbound)'
         print(
             f'wrote {a.out}.simpl: {n} public input{"s" if n > 1 else ""}, {binding}, '
             f'cost bound {cost:,} mWU ({time.time() - t0:.0f}s)'
@@ -148,8 +172,11 @@ def main(argv=None):
     proof, inputs = load_proof(a.files[1]), load_public(a.files[2])
     need(len(inputs) == n, f'public.json has {len(inputs)} signals, the key {n}')
     need(B.groth16_verify(vk, proof, inputs), 'the proof does not verify')
-    g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth)
-    if depth:
+    g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth, sighash_input=by_input)
+    if by_input:
+        need(Groth16.root(sighash, []) == inputs[0], 'the first public signal is not this sighash')
+        wit = g.witness(proof, inputs, sighash)
+    elif depth:
         need(bool(a.leaves), '--leaves is needed for a bound circuit')
         sibs = merkle.siblings([sighash] + values)
         need(Groth16.root(sighash, sibs) == inputs[0], 'the leaves do not give the public signal')

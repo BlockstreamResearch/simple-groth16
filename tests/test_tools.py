@@ -3,7 +3,8 @@
 
 tools/groth16_snarkjs.py: a circuit is bound to the transaction unless --unbound is given (--values 0 is
 PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive python -O, and a witness
-whose leaves do not give the public signal is refused.  tools/fflonk_snarkjs.py: --bind or --unbound is
+whose leaves do not give the public signal is refused, as is one whose sighash is not the first public
+signal (--sighash-input).  tools/fflonk_snarkjs.py: --bind or --unbound is
 required, a key point off the curve is refused under python -O, and so is a proof for the other
 transcript.  tools/circom_demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the
 recorded one, whether it is cached or downloaded, and fflonk takes the smallest recorded size that is
@@ -24,6 +25,7 @@ import types
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 EXAMPLE = os.path.join(ROOT, 'examples', 'multiplier')
 FFLONK = os.path.join(ROOT, 'examples', 'fflonk')
+NOIR = os.path.join(ROOT, 'examples', 'noir')
 
 
 def load(name):
@@ -89,6 +91,19 @@ def check_wrong_leaves(T, tmp):
     refused(T.main, argv, expect='the leaves do not give the public signal')
     assert not os.path.exists(os.path.join(tmp, 'w.w0.json'))
     refused(T.main, ['witness', *files, '--out', os.path.join(tmp, 'w')], expect='--unbound')
+
+
+def check_sighash_input(T, tmp):
+    vk = os.path.join(NOIR, 'verification_key.json')
+    files = [vk, os.path.join(NOIR, 'proof.json'), os.path.join(NOIR, 'public.json')]
+    out = os.path.join(tmp, 'si')
+    refused(T.main, ['program', vk, '--sighash-input', '--values', '1', '--out', out], expect='goes alone')
+    refused(T.main, ['program', vk, '--sighash-input', '--unbound', '--out', out], expect='goes alone')
+    refused(T.main, ['program', vk, '--sighash', '00' * 32, '--unbound', '--out', out], expect='--sighash goes with')
+    refused(T.main, ['witness', *files, '--sighash-input', '--out', out], expect='needs --sighash')
+    argv = ['witness', *files, '--sighash-input', '--sighash', '11' * 32, '--out', out]
+    refused(T.main, argv, expect='not this sighash')
+    assert not os.path.exists(out + '.w0.json')
 
 
 def check_ptau(tmp):
@@ -179,6 +194,7 @@ def main():
         check_binding_depth(T)
         check_optimized(tmp)
         check_wrong_leaves(T, tmp)
+        check_sighash_input(T, tmp)
         check_ptau(tmp)
         check_fflonk(tmp)
         check_ptau_fflonk(tmp)

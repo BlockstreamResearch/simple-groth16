@@ -10,3 +10,4 @@ circuits/node_modules/
 *.ptau
 *.zkey
 *.wtns
+circuits/noir/*/target/

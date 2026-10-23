@@ -122,14 +122,24 @@ tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/ff
 tools/regtest.sh build/fflonk   # an Elements regtest node: spend, a redirected spend rejected, key path
 ```
 
+## Noir
+
+A [Noir](https://noir-lang.org) circuit can use the Groth16 verifier too ([docs/noir.md](docs/noir.md)). `tools/noir_r1cs.py` compiles it with nargo and converts it to R1CS with [Noir-Groth16](https://github.com/jamesbachini/Noir-Groth16)'s `noir-cli`, refusing opcodes the converter does not lower soundly, Keccak among them. snarkjs then makes the key and the proofs, as for circom. The circuit takes the sighash as its first public input (`groth16_snarkjs.py --sighash-input`), so it needs no hash: the toy circuit costs 55.3 M mWU with its two public inputs.
+
+```sh
+python3 tools/circom_demo.py setup --frontend noir --out build/noir
+tools/harness/target/release/deploy compile build/noir/verifier.simpl build/noir/verifier
+tools/regtest.sh build/noir
+```
+
 ## Repository
 
 | | |
 |---|---|
 | `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `poly.py`, `curve.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal); for fflonk, `keccak.py`, `msm.py`, `frprog.py` (F_r straight-line code), `fflonk_ref.py` (the port of snarkjs's verifier) and `fflonk.py` |
-| `circuits/` | `public_merkle.circom` (the public-signal convention), the toy `multiplier.circom`, and `multiplier_fflonk.circom` for fflonk |
+| `circuits/` | `public_merkle.circom` (the public-signal convention), the toy `multiplier.circom`, `multiplier_fflonk.circom` for fflonk, and `noir/multiplier`, the toy statement in Noir |
 | `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` and `sizes` profile them, `deploy` builds addresses and transactions |
-| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (snarkjs key and proof to program and witness), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `circom_demo.py` and `regtest.sh` |
+| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (snarkjs key and proof to program and witness), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `noir_r1cs.py` (a Noir circuit as R1CS), `circom_demo.py` and `regtest.sh` |
 | `tests/` | tests (plus `test_bn254_ref.py` against py_ecc) |
 | `examples/` | generated programs |
 | `docs/` | design notes and benchmarks |

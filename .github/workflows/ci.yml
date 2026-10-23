@@ -8,57 +8,83 @@ on:
 permissions:
   contents: read
 
+# The actions are pinned to commits (the tag in the comment; Dependabot proposes updates), the Python
+# packages to hashes (ci/requirements-*.txt, from the .in files with `uv pip compile --universal
+# --python-version 3.10 --generate-hashes`), and Rust by tools/harness/rust-toolchain.toml.  Only runs on
+# main save the Rust cache, so a pull request cannot fill the cache that main's runs restore.
 jobs:
   layers:
     name: test_${{ matrix.layer }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         layer: [fp, poly, curve, pairing, g2_check, binding, groth16, inputs2, inputs, invariants, tools]
     steps:
-      - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: rustup toolchain install 1.97.0 --profile minimal -c clippy,rustfmt # tools/harness/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: tools/harness
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make test-${{ matrix.layer }}
 
   # The plain Python reference.
   reference:
     name: test_bn254_ref
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.x"
-      - run: pip install py_ecc
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r ci/requirements-ref.txt
       - run: make test-bn254_ref
 
-  # The committed example program and witness regenerate byte for byte.
+  # The committed example program and witness regenerate byte for byte, and so do its consensus
+  # encoding and witness names, from which the address is derived.
   example:
     name: example
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - run: make example
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: rustup toolchain install 1.97.0 --profile minimal -c clippy,rustfmt # tools/harness/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: tools/harness
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: make example-uprog
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.10"
-      - run: pip install ruff==0.16.8 mypy==2.3.1
-      # a fixed Rust, so that a new clippy lint does not fail the build by itself
-      - run: rustup toolchain install 1.97.0 --profile minimal -c clippy,rustfmt && rustup default 1.97.0
-      - uses: Swatinem/rust-cache@v2
+      - run: pip install --require-hashes -r ci/requirements-lint.txt
+      - run: rustup toolchain install 1.97.0 --profile minimal -c clippy,rustfmt # tools/harness/rust-toolchain.toml
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: tools/harness
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make lint

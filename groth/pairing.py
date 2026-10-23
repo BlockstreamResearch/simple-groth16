@@ -53,8 +53,8 @@ is 9 less than the product's (DegRing tracks both parts).
 
 Soundness.  r is the SHA-256 of the public inputs, the proof and everything committed, and z the
 SHA-256 of r and Q.  If some R_k is not 0 modulo M, S is not 0 modulo M except for at most 128 values of
-r; then S - Q M is a nonzero polynomial of degree at most 171 (one input), which vanishes at z with
-probability at most 171 / p.  The program gets r and z as witness words and compares them with the two
+r; then S - Q M is a nonzero polynomial of degree at most max(deg S, n_Q + 11), n_Q the words of Q (171
+for one input, 227 for three), which vanishes at z with probability at most that degree over p.  The program gets r and z as witness words and compares them with the two
 hashes at the end.
 
 `relations` is written once over an abstract ring: the prover runs it on polynomials to get S and Q,

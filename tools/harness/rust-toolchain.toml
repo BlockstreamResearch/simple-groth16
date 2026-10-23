@@ -1,0 +1,5 @@
+# the Rust that CI builds, tests and lints with (a new compiler or clippy cannot change a green build)
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

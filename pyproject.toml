@@ -7,8 +7,8 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-# the linters, and py_ecc for tests/test_bn254_ref.py
-dev = ["ruff==0.16.8", "mypy==2.3.1", "py_ecc"]
+# the linters, and py_ecc for tests/test_bn254_ref.py (CI installs these with hashes: ci/requirements-*.txt)
+dev = ["ruff==0.16.8", "mypy==2.3.1", "py_ecc==8.0.0"]
 
 [build-system]
 requires = ["setuptools>=64"]

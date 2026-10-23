@@ -22,7 +22,7 @@ The verifier of `circuits/multiplier.circom` (a·b = c, bound to the spending tr
 |---|---|
 | `verification_key.json` | the snarkjs key |
 | `verifier.simpl.gz` | the generated program, 2.8 MB of text (most of it the public input's tables) |
-| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `bab3e5fa…2e222d55` |
+| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `bab3e5faa2f18478ca38eea1217dec723e58dab47589db3bd29b020aae222d55` |
 | `verifier.wnames` | the names of its witness nodes in the order the encoding reads their values (`deploy compile`) |
 | `proof.json`, `public.json` | the snarkjs proof and its public signal |
 | `leaves.json` | the two leaves behind the public signal: the transaction's sighash and c |

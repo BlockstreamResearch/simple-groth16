@@ -5,10 +5,10 @@
     python3 tools/fflonk_snarkjs.py witness verification_key.json proof.json public.json --transcript keccak|sha256 --bind|--unbound --out build/x
 
 `program` writes x.simpl (then `deploy compile` makes x.uprog and `deploy address` the output to fund).
-`witness` writes x.w0.json for `deploy spend`; it verifies the proof first (groth/fflonk_ref.py).
+`witness` writes x.w0.json for `deploy spend`; it verifies the proof first (groth/fflonk/reference.py).
 
 The verifier costs more than its program and witness weigh, so the witness carries padding (zero blocks
-of 512 bytes, groth/fflonk.py) to raise the input's budget.  `witness` runs the program once in hand
+of 512 bytes, groth/fflonk/verifier.py) to raise the input's budget.  `witness` runs the program once in hand
 (HAND, default tools/harness/target/release/hand) to learn the pruned program's size and pads just
 enough; --pad N sets the number of blocks instead.  hand runs programs in a dummy environment, whose
 sighash is not the transaction's, so with --bind it measures the program without the binding.  The
@@ -31,16 +31,21 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import fflonk_ref as ref
+from groth.core import snarkjs
+from groth.core.dsl import CheckFailed
 from groth.fflonk import Fflonk
+from groth.fflonk import reference as ref
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HAND = os.environ.get('HAND', os.path.join(ROOT, 'tools', 'harness', 'target', 'release', 'hand'))
 
 
-def load_json(path):
-    with open(path) as f:
-        return json.load(f)
+def refusing(f, path):
+    """f(the JSON at path), with a failed check (groth/core/snarkjs.py) as a refusal."""
+    try:
+        return f(snarkjs.load(path))
+    except CheckFailed as e:
+        sys.exit(f'fflonk_snarkjs.py: {path}: {e}')
 
 
 def main(argv=None):
@@ -55,7 +60,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.bind == a.unbound:
         sys.exit('give --bind (the first two public signals are the sighash) or --unbound')
-    vk = ref.load_vk(load_json(a.files[0]))
+    vk = refusing(snarkjs.fflonk_key, a.files[0])
     t0 = time.time()
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     if a.command == 'program':
@@ -70,7 +75,7 @@ def main(argv=None):
         return
     if len(a.files) != 3:
         sys.exit('witness needs verification_key.json proof.json public.json')
-    proof, pub = ref.load_proof(load_json(a.files[1])), [int(v) for v in load_json(a.files[2])]
+    proof, pub = refusing(snarkjs.fflonk_proof, a.files[1]), refusing(snarkjs.public_signals, a.files[2])
     if not ref.verify(a.transcript, vk, proof, pub)['ok']:
         sys.exit(f'the proof does not verify ({a.transcript} transcript)')
     text, g, estimate = Fflonk.compile(vk, a.transcript, a.bind)

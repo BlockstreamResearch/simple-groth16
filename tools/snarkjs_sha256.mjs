@@ -2,7 +2,7 @@
 // snarkjs 0.7.6's fflonk prover and verifier with a SHA-256 Fiat-Shamir transcript instead of Keccak-256.
 // The transcript is otherwise snarkjs's: the same items in the same order, points uncompressed (x then y,
 // 32 bytes each, big-endian), scalars 32 bytes big-endian, and each challenge the digest as a big-endian
-// integer reduced mod r.  The verifier's SHA-256 mode (groth/fflonk.py) checks these proofs.
+// integer reduced mod r.  The verifier's SHA-256 mode (groth/fflonk/verifier.py) checks these proofs.
 //
 //   node tools/snarkjs_sha256.mjs prove <circuit.zkey> <witness.wtns> <proof.json> <public.json>
 //   node tools/snarkjs_sha256.mjs verify <verification_key.json> <public.json> <proof.json>

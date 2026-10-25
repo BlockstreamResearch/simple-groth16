@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F_p12 as F_p[w] / (w^12 - 18 w^6 + 82) (groth/poly.py) against the tower of bn254.py: the map between
+"""F_p12 as F_p[w] / (w^12 - 18 w^6 + 82) (groth/core/poly.py) against the tower of bn254.py: the map between
 them is a ring isomorphism, F_p2 embeds through phi, the lines embed, and pi, pi^2, pi^3 are the sparse
 linear maps the program uses.  (tests/test_bn254_ref.py also checks the map against py_ecc, whose FQ12 is
 this field.)
@@ -12,8 +12,8 @@ import random
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B
-from groth import poly
+from groth.core import bn254 as B
+from groth.core import poly
 
 P = B.P
 

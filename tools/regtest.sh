@@ -6,7 +6,7 @@
 #
 #   tools/regtest.sh build/multiplier
 #
-# Before: `python3 tools/circom_demo.py setup --out build/multiplier` and
+# Before: `python3 tools/demo.py setup --out build/multiplier` and
 # `deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.  The fflonk verifier runs
 # the same way, from `setup --protocol fflonk [--transcript sha256]` (its transaction is about 32 kvB).
 #
@@ -86,7 +86,7 @@ echo "verifier address (no key path): $addr"
 fund "$addr" "$(echo "$info" | json script_pubkey)"
 sighash=$("$DEPLOY" sighash "$PROG" $NET "$fund" "$vout" $SATS "$asset" "$dest" "$FEE" --genesis "$genesis")
 echo "sighash of the spending transaction: $sighash"
-python3 "$ROOT/tools/circom_demo.py" prove --out "$OUT" --sighash "$sighash"
+python3 "$ROOT/tools/demo.py" prove --out "$OUT" --sighash "$sighash"
 "$DEPLOY" spend "$PROG" "$OUT/verifier.w0.json" $NET "$fund" "$vout" $SATS "$asset" "$dest" "$FEE" --genesis "$genesis" > "$OUT/spend.hex"
 accept "$OUT/spend.hex"
 mine "$OUT/spend.hex" "spent with the proof"
@@ -96,7 +96,7 @@ dest2=$(unconfidential "$($CLI getnewaddress "" bech32)")
 spk1=$($CLI getaddressinfo "$dest" | json scriptPubKey); spk2=$($CLI getaddressinfo "$dest2" | json scriptPubKey)
 fund "$addr" "$(echo "$info" | json script_pubkey)"
 sighash=$("$DEPLOY" sighash "$PROG" $NET "$fund" "$vout" $SATS "$asset" "$dest" "$FEE" --genesis "$genesis")
-python3 "$ROOT/tools/circom_demo.py" prove --out "$OUT" --sighash "$sighash" > /dev/null
+python3 "$ROOT/tools/demo.py" prove --out "$OUT" --sighash "$sighash" > /dev/null
 "$DEPLOY" spend "$PROG" "$OUT/verifier.w0.json" $NET "$fund" "$vout" $SATS "$asset" "$dest" "$FEE" --genesis "$genesis" 2> /dev/null > "$OUT/spend2.hex"
 sed "s/$spk1/$spk2/" "$OUT/spend2.hex" > "$OUT/redirected.hex"
 if cmp -s "$OUT/spend2.hex" "$OUT/redirected.hex"; then

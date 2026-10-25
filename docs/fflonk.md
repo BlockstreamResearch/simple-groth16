@@ -1,10 +1,10 @@
 # The fflonk verifier
 
-`groth/fflonk.py` generates a Simplicity verifier for [snarkjs](https://github.com/iden3/snarkjs) 0.7.6 fflonk proofs on BN254. fflonk's setup is universal: a circuit needs a powers-of-tau file of the right size and no ceremony of its own. The price is a larger verifier than Groth16's.
+`groth/fflonk/verifier.py` generates a Simplicity verifier for [snarkjs](https://github.com/iden3/snarkjs) 0.7.6 fflonk proofs on BN254. fflonk's setup is universal: a circuit needs a powers-of-tau file of the right size and no ceremony of its own. The price is a larger verifier than Groth16's.
 
 The verifier has two transcript modes:
 
-- **keccak** checks proofs from snarkjs as it is. Its Fiat-Shamir transcript hashes with Keccak-256, which Simplicity has no jet for, so the program computes Keccak-f[1600] from 64-bit jets (`groth/keccak.py`).
+- **keccak** checks proofs from snarkjs as it is. Its Fiat-Shamir transcript hashes with Keccak-256, which Simplicity has no jet for, so the program computes Keccak-f[1600] from 64-bit jets (`groth/core/keccak.py`).
 - **sha256** checks proofs whose transcript hashes with SHA-256 instead. `tools/snarkjs_sha256.mjs` makes them: it is snarkjs with the transcript's hash swapped. Such proofs no longer verify with snarkjs's own verifier or its Solidity verifier.
 
 ## Cost
@@ -38,9 +38,9 @@ A padded transaction weighs about its cost, 1 WU per 1,000 mWU, under the 400 kW
 The toy circuit end to end:
 
 ```sh
-python3 tools/circom_demo.py setup --protocol fflonk --transcript sha256 --out build/fflonk
+python3 tools/demo.py setup --protocol fflonk --transcript sha256 --out build/fflonk
 tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/fflonk/verifier
-python3 tools/circom_demo.py prove --out build/fflonk --sighash <the spending transaction's sighash>
+python3 tools/demo.py prove --out build/fflonk --sighash <the spending transaction's sighash>
 ```
 
 `setup` compiles the circuit, runs snarkjs's fflonk setup, exports the verification key and writes the program. `prove` makes the proof (with `tools/snarkjs_sha256.mjs` for the SHA-256 mode) and the padded witness. `tools/regtest.sh build/fflonk` runs the whole flow on an Elements regtest node, as for Groth16. `make fflonk-demo` runs setup and prove in both modes, without a node.
@@ -56,7 +56,7 @@ python3 tools/fflonk_snarkjs.py witness verification_key.json proof.json public.
 
 ## How it works
 
-The program checks what snarkjs's `fflonkVerify` checks. `groth/fflonk_ref.py` is a line-by-line Python port of it, and the tests compare the program with the port on every intermediate value.
+The program checks what snarkjs's `fflonkVerify` checks. `groth/fflonk/reference.py` is a line-by-line Python port of it, and the tests compare the program with the port on every intermediate value.
 
 ### Inputs and transcript
 
@@ -68,7 +68,7 @@ Keccak-f[1600] takes about 120 jets per round: `xor_xor_64` for theta's column p
 
 ### The opening
 
-The F_r arithmetic uses the same CRT Montgomery method as F_p (`groth/fp.py` with `FR`). `groth/frprog.py` writes it as straight-line code: the prover runs it on integers, and the program generator records it and lays it out level by level, each value bound once. An inverse is a hint: the prover supplies w and the program checks x w = 1.
+The F_r arithmetic uses the same CRT Montgomery method as F_p (`groth/core/fp.py` with `FR`). `groth/core/frprog.py` writes it as straight-line code: the prover runs it on integers, and the program generator records it and lays it out level by level, each value bound once. An inverse is a hint: the prover supplies w and the program checks x w = 1.
 
 The formulas are snarkjs's, simplified so they need fewer products and inverses:
 
@@ -80,7 +80,7 @@ That leaves 22 inverse hints, plus one per public input.
 
 ### The MSM
 
-A1 - C0 = q1 C1 + q2 C2 - t W1 + y W2 - e G1, with four points from the proof and one constant (`groth/msm.py`).
+A1 - C0 = q1 C1 + q2 C2 - t W1 + y W2 - e G1, with four points from the proof and one constant (`groth/core/msm.py`).
 
 **Group law.** Points are affine. The prover supplies each operation's slope, and for an addition also d = 1 / (x_Q - x_T). The program checks
 
@@ -119,9 +119,9 @@ How many blocks a spend needs depends on the pruned program's size, which is kno
 - Every hint word is below 2^254 (two bits checked), so its products stay within the CRT bound.
 - Each witness node is read once in the program's tree unfolding (`Fflonk.compile` checks it), so a spender who unshares a node cannot give its copies different values.
 - The challenges are recomputed from the transcript. The evaluations, the public inputs and the challenge words must be canonical, which is stricter than snarkjs: snarkjs reduces an evaluation mod r.
-- The pairing check's soundness is as `docs/design.md` explains, and the program checks its G2 slot and both G1 slots.
+- The pairing check's soundness is as `docs/groth16.md` explains, and the program checks its G2 slot and both G1 slots.
 - A proof with a commitment at the point at infinity has no witness. snarkjs would accept one, but an honest prover produces one with negligible probability.
-- The key is compiled in, so it is trusted as the deployer's: `fflonk_ref.load_vk` checks that its points are on the curves and X_2 in the order-r subgroup, nothing more.
+- The key is compiled in, so it is trusted as the deployer's: `snarkjs.fflonk_key` checks that its points are on the curves and X_2 in the order-r subgroup, nothing more.
 
 ## Tests
 

@@ -11,8 +11,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
-from groth import fp as F
-from groth.sym import Sym
+from groth.core import fp as F
+from groth.core.sym import Sym
 
 with open(os.path.join(HERE, 'fp_mul.w0.json')) as f:
     w = json.load(f)['w_in']['p']

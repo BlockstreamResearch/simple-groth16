@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""groth/bn254.py against py_ecc's bn128 (pip install py_ecc): the tower, G1 and G2, the pairing, the
+"""groth/core/bn254.py against py_ecc's bn128 (pip install py_ecc): the tower, G1 and G2, the pairing, the
 residue witness, Groth16 verification, and points of the twist outside G2.
 
     python3 tests/test_bn254_ref.py
@@ -12,8 +12,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from py_ecc import bn128 as E
 
-from groth import bn254 as B
-from groth import poly
+from groth.core import bn254 as B
+from groth.core import poly
 
 rng = random.Random(1)
 
@@ -27,7 +27,7 @@ def to_pyecc_g2(pt):
 
 
 def to_pyecc_fq12(f):
-    # py_ecc's FQ12 is F_p[w] / (w^12 - 18 w^6 + 82), the direct extension of groth/poly.py
+    # py_ecc's FQ12 is F_p[w] / (w^12 - 18 w^6 + 82), the direct extension of groth/core/poly.py
     return E.FQ12(poly.from_tower(f))
 
 

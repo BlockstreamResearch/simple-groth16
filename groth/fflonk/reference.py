@@ -1,7 +1,7 @@
 """The fflonk verifier of snarkjs 0.7.6 in plain Python, with its Keccak-256 transcript or a SHA-256 one.
 
 A line-by-line port of snarkjs's src/fflonk_verify.js (the names follow it), so that the program
-(fflonk.py) and its witness can be checked against every intermediate value.  `verify` returns those
+(verifier.py) and its witness can be checked against every intermediate value.  `verify` returns those
 values; `ok` says whether the proof verifies.
 
 The transcript: snarkjs absorbs points uncompressed (x then y, 32-byte big-endian words) and scalars as
@@ -21,59 +21,14 @@ import hashlib
 from collections.abc import Sequence
 from typing import Any
 
-from . import bn254 as B
-from .dsl import ensure
-from .keccak import keccak256
+from ..core import bn254 as B
+from ..core.keccak import keccak256
+from ..core.snarkjs import FFLONK_EVALS as EVALS
+from ..core.snarkjs import FFLONK_POINTS as POINTS
 
 R = B.R
 G1Point = tuple[int, int]
-EVALS = ['ql', 'qr', 'qm', 'qo', 'qc', 's1', 's2', 's3', 'a', 'b', 'c', 'z', 'zw', 't1w', 't2w']
-POINTS = ['C1', 'C2', 'W1', 'W2']
 MODES = ('keccak', 'sha256')
-
-
-# ---------------------------------------------------------------------------------------------------
-# snarkjs files
-def g1(pt: Sequence[Any]) -> G1Point:
-    """A snarkjs G1 point (projective, decimal strings), affine; refused at infinity or off the curve."""
-    x, y, z = (int(v) for v in pt)
-    ensure(min(x, y, z) >= 0 and max(x, y, z) < B.P and z != 0, 'a G1 point: coordinates below p, not at infinity')
-    if z != 1:
-        zi = pow(z, -1, B.P)
-        x, y = x * zi % B.P, y * zi % B.P
-    ensure(B.g1_on_curve(x, y), 'G1 point not on the curve')
-    return (x, y)
-
-
-def g2(pt: Sequence[Any]) -> B.G2Point:
-    """A snarkjs G2 point, affine; refused at infinity, off the twist or outside the order-r subgroup."""
-    ensure(all(0 <= int(c) < B.P for v in pt for c in v), 'a G2 point: coordinates below p')
-    x, y, z = (B.Fp2(int(v[0]), int(v[1])) for v in pt)
-    ensure(not z.is_zero(), 'a G2 point at infinity')
-    if z != B.Fp2(1):
-        zi = z.inv()
-        x, y = x * zi, y * zi
-    ensure(B.g2_on_curve(x, y), 'G2 point not on the twist')
-    ensure(B.g2_in_subgroup((x, y)), 'G2 point not in the order-r subgroup')
-    return (x, y)
-
-
-def load_vk(j: dict[str, Any]) -> dict[str, Any]:
-    """The verification key (fflonk, bn128) as numbers and points."""
-    ensure(j.get('protocol') == 'fflonk' and j.get('curve') in ('bn128', 'bn254'), 'a snarkjs fflonk/bn128 key')
-    vk: dict[str, Any] = {k: int(j[k]) for k in ('nPublic', 'power', 'k1', 'k2', 'w', 'w3', 'w4', 'w8', 'wr')}
-    vk['C0'] = g1(j['C0'])
-    vk['X_2'] = g2(j['X_2'])
-    return vk
-
-
-def load_proof(j: dict[str, Any]) -> dict[str, Any]:
-    """The proof: the 4 points and the 15 evaluations the verifier reads (snarkjs also writes `inv`, which
-    its own verifier does not read).  Evaluations are reduced mod r, as snarkjs reads them."""
-    ensure(j.get('protocol') == 'fflonk', 'a snarkjs fflonk proof')
-    out: dict[str, Any] = {k: g1(j['polynomials'][k]) for k in POINTS}
-    out.update({k: int(j['evaluations'][k]) for k in EVALS})
-    return out
 
 
 # ---------------------------------------------------------------------------------------------------

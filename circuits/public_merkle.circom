@@ -1,6 +1,6 @@
 pragma circom 2.0.0;
 
-// The public-signal convention of circuits for the Simplicity verifier (groth/merkle.py computes the
+// The public-signal convention of circuits for the Simplicity verifier (groth/core/binding.py computes the
 // same root in Python).  The circuit has one public signal, the SHA-256 Merkle root of its public
 // values, so the verifier's cost does not depend on how many there are.  Leaf 0 is the sighash of the
 // spending transaction, which the verifier compares with its sig_all_hash jet.

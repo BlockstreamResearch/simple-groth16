@@ -3,9 +3,9 @@
 (circuits/multiplier.circom) or the fflonk verifier (circuits/multiplier_fflonk.circom), or, with
 --frontend noir, the same statement in Noir (circuits/noir/multiplier) for either verifier:
 
-    python3 tools/circom_demo.py setup --out build/multiplier [--frontend noir] [--protocol fflonk [--transcript sha256]]
+    python3 tools/demo.py setup --out build/multiplier [--frontend noir] [--protocol fflonk [--transcript sha256]]
         circuit, verification key (verification_key.json) and verifier program (verifier.simpl)
-    python3 tools/circom_demo.py prove --out build/multiplier --sighash <64 hex digits> [--a 3 --b 7]
+    python3 tools/demo.py prove --out build/multiplier --sighash <64 hex digits> [--a 3 --b 7]
         proof.json, public.json and the verifier's witness verifier.w0.json (and leaves.json for Groth16)
 
 `setup` records the frontend, the protocol and the transcript in demo.json, which `prove` reads.  The
@@ -39,7 +39,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from groth import bn254, merkle
+from groth.core import binding, bn254
 
 CIRCOM = os.environ.get('CIRCOM', 'circom')
 NODE_MODULES = os.environ.get('NODE_MODULES', os.path.join(ROOT, 'circuits', 'node_modules'))
@@ -134,8 +134,8 @@ def check_tools(frontend='circom'):
 def inputs_json(path, a, b, sighash, frontend):
     """The circuit's inputs by name: the sighash as two limbs (circom), or as one signal (Noir); returns c."""
     c = a * b % bn254.R
-    limbs = [str(v) for v in merkle.sighash_limbs(sighash)]
-    sig = str(merkle.public_signal(sighash)) if frontend == 'noir' else limbs
+    limbs = [str(v) for v in binding.sighash_limbs(sighash)]
+    sig = str(binding.public_signal(sighash)) if frontend == 'noir' else limbs
     with open(path, 'w') as f:
         json.dump({'a': str(a), 'b': str(b), 'c': str(c), 'sighash': sig}, f)
     return c
@@ -178,8 +178,8 @@ def setup(a):
         snarkjs('zkey', 'contribute', zkey0, zkey, '--name=demo', f'-e={os.urandom(32).hex()}')
         # check that the key comes from the circuit and the checked powers of tau; prints the contribution hash
         snarkjs('zkey', 'verify', r1cs, pot, zkey)
-        binding = ['--sighash-input'] if a.frontend == 'noir' else ['--values', str(VALUES)]
-        tool = ['groth16_snarkjs.py', 'program', vk] + binding
+        bind = ['--sighash-input'] if a.frontend == 'noir' else ['--values', str(VALUES)]
+        tool = ['groth16_snarkjs.py', 'program', vk] + bind
     else:  # universal: the key comes from the powers of tau alone, with no contribution of its own
         snarkjs('fflonk', 'setup', r1cs, pot, zkey)
         tool = ['fflonk_snarkjs.py', 'program', vk, '--transcript', a.transcript, '--bind']
@@ -199,7 +199,7 @@ def prove(a):
     by_root = frontend == 'circom' and protocol == 'groth16'  # bound by the Merkle root, not by the inputs
     a.a, a.b = a.a % bn254.R, a.b % bn254.R  # the circuit's field is the BN254 scalar field
     sighash = bytes.fromhex(a.sighash)
-    limbs = merkle.sighash_limbs(sighash)
+    limbs = binding.sighash_limbs(sighash)
     c = inputs_json(os.path.join(out, 'input.json'), a.a, a.b, sighash, frontend)
     print(f'a = {a.a}\nb = {a.b}\nc = a b mod r = {c}')
     if by_root:
@@ -229,12 +229,12 @@ def prove(a):
     with open(public) as f:
         signals = [int(v) for v in json.load(f)]
     if by_root:
-        if signals[0] != merkle.public_signal(merkle.root([sighash, c])):
-            sys.exit('the circuit and merkle.py disagree on the root')
-        print(f'the public signal is the Merkle root of the sighash and c = {c}, as merkle.py computes it')
+        if signals[0] != binding.public_signal(binding.root([sighash, c])):
+            sys.exit('the circuit and groth/core/binding.py disagree on the root')
+        print(f'the public signal is the Merkle root of the sighash and c = {c}, as groth/core/binding.py computes it')
         tool = ['groth16_snarkjs.py', 'witness', vk, proof, public, '--leaves', os.path.join(out, 'leaves.json')]
     elif frontend == 'noir':
-        if signals != [merkle.public_signal(sighash), c]:
+        if signals != [binding.public_signal(sighash), c]:
             sys.exit(f'the public signals are not the sighash and c: {signals}')
         print(f'the public signals are the sighash (its low 253 bits) and c = {c}')
         tool = ['groth16_snarkjs.py', 'witness', vk, proof, public, '--sighash-input', '--sighash', a.sighash]

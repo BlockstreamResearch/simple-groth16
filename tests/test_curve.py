@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""On-curve checks, table lookups and the range check of an input (groth/curve.py) against bn254.py.
+"""On-curve checks, table lookups and the range check of an input (groth/core/curve.py) against bn254.py.
 Off-curve points, a wrong table entry and an input >= r must be rejected.
 
     python3 tests/test_curve.py
@@ -12,11 +12,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fp as F
-from groth.curve import Curve
-from groth.dsl import Tbalanced, balanced_paths, wbalanced, wv
-from groth.sym import Num, Sym, flat, words
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core.curve import Curve
+from groth.core.dsl import Tbalanced, balanced_paths, wbalanced, wv
+from groth.core.sym import Num, Sym, flat, words
 
 P = F.P
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The G2 membership check (groth/pairing.py): after the loop, B's point at z must equal -psi^3(B) at z.
+"""The G2 membership check (groth/core/pairing.py): after the loop, B's point at z must equal -psi^3(B) at z.
 For B on the twist, every other relation is made to hold: the Miller values are B's, the residue
 witness c is a fixed element, and the constant of the check is chosen so that the residue check holds:
 c^lambda times the inverse of the Miller value.
@@ -21,9 +21,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import harness
 from test_pairing import program, witness
 
-from groth import bn254 as B
-from groth import pairing as PC
-from groth import poly
+from groth.core import bn254 as B
+from groth.core import pairing as PC
+from groth.core import poly
 
 COFACTOR_PRIMES = list(PC.COFACTOR_PRIMES)
 

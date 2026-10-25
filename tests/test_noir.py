@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Noir circuits through R1CS: tools/noir_r1cs.py's opcode check, and the Groth16 verifier bound by its
-first public input (groth/groth16.py, sighash_input) on the proofs in examples/noir.
+first public input (groth/groth16/verifier.py, sighash_input) on the proofs in examples/noir.
 
     python3 tests/test_noir.py [quick]
 
@@ -9,7 +9,7 @@ allows assertions, Brillig calls and the RANGE, AND and XOR black boxes, skips t
 code, and refuses the rest (Keccak-f, which noir-cli writes as an unconstrained hint; memory; calls)
 unless trusted, and any line it does not know.
 
-The proofs are of circuits/noir/multiplier (a = 3, b = 7, c = 21), made by `tools/circom_demo.py
+The proofs are of circuits/noir/multiplier (a = 3, b = 7, c = 21), made by `tools/demo.py
 --frontend noir` for the harness's dummy sighash and for another one.  The program must accept the
 first at the predicted cost, within its budget, and reject the second, and a wrong c.  `quick` skips the
 program.
@@ -26,11 +26,12 @@ import groth16_snarkjs as T
 import harness
 import noir_r1cs as N
 
-from groth import fp as F
-from groth import merkle
-from groth import pairing as PC
+from groth.core import binding
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core.budget import budget_ok
+from groth.core.sym import Num
 from groth.groth16 import Groth16
-from groth.sym import Num
 
 EX = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'examples', 'noir')
 DUMMY_SIGHASH = bytes.fromhex('9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a')
@@ -112,7 +113,7 @@ def program():
     for label, sighash, suffix in (('this', DUMMY_SIGHASH, ''), ('other', OTHER_SIGHASH, '_other_sighash')):
         proof = T.load_proof(os.path.join(EX, f'proof{suffix}.json'))
         inputs = T.load_public(os.path.join(EX, f'public{suffix}.json'))
-        assert inputs == [merkle.public_signal(sighash), 21], inputs
+        assert inputs == [binding.public_signal(sighash), 21], inputs
         proofs[label] = (proof, inputs, sighash)
     bnd = PC.bounds()
     g = Groth16(F.Fp(Num()), vk, b=bnd, sighash_input=True)
@@ -133,7 +134,7 @@ def program():
     )
     r = harness.expect_ok(results[0], 'noir')
     assert r['cost'] == estimate, (r['cost'], estimate)
-    assert Groth16.budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), r
+    assert budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), r
     for bad, label in zip(results[1:], ('another sighash', 'a wrong c')):
         harness.expect_rejected(bad, label)
         print(f'{label:15} rejected as expected')

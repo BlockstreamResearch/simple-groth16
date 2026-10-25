@@ -1,6 +1,6 @@
 """The fflonk verifier of snarkjs 0.7.6 in Simplicity, with snarkjs's Keccak-256 transcript or a SHA-256 one.
 
-The program checks what snarkjs's fflonkVerify checks (fflonk_ref.py is its plain-Python port):
+The program checks what snarkjs's fflonkVerify checks (reference.py is its plain-Python port):
 
   inputs      the public inputs, the 15 evaluations and the challenges' words are below r, the
               coordinates of C1, C2, W1 below p, and the points on the curve
@@ -38,19 +38,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from . import bn254 as B
-from . import fflonk_ref as ref
-from . import msm as M
-from . import pairing
-from .curve import Curve
-from .dsl import CheckFailed, Tbalanced, WSpec, ensure, wbalanced, wpair, wv
-from .fp import FR, WORD_MAX, Fp, Val
-from .frprog import FrDag, FrInts
-from .groth16 import Groth16
-from .keccak import Keccak
-from .merkle import sighash_limbs
-from .pairing import KB, PairingCheck
-from .sym import SHA_CTX_W, E, Sym, words
+from ..core import bn254 as B
+from ..core import msm as M
+from ..core import pairing
+from ..core.binding import limbs_check, sighash_limbs
+from ..core.budget import budget_ok
+from ..core.curve import Curve
+from ..core.dsl import CheckFailed, Tbalanced, WSpec, ensure, wbalanced, wpair, wv
+from ..core.fp import FR, WORD_MAX, Fp, Val
+from ..core.frprog import FrDag, FrInts
+from ..core.keccak import Keccak
+from ..core.pairing import KB, PairingCheck
+from ..core.sym import SHA_CTX_W, E, Sym, words
+from . import reference as ref
 
 P, R = B.P, B.R
 EVALS = ref.EVALS
@@ -225,7 +225,7 @@ def _W(ws: Sequence[int]) -> WSpec:
 
 
 class Fflonk:
-    """Generator of the verifier of a snarkjs fflonk key (fflonk_ref.load_vk), for the transcript `mode`
+    """Generator of the verifier of a snarkjs fflonk key (snarkjs.fflonk_key), for the transcript `mode`
     ('keccak' or 'sha256').  bind: the first two public inputs are the sighash (see the module's
     docstring).  b: pairing.bounds()."""
 
@@ -270,7 +270,7 @@ class Fflonk:
         return 256 * (self.n + 6 + len(EVALS) + len(CHALLENGES) + self.n_inv + 8 + 1) + pairing.witness_bits()
 
     def witness(self, proof: dict[str, Any], pub: Sequence[int], sighash: bytes | int | None = None) -> dict[str, Any]:
-        """The witness of a proof (fflonk_ref.load_proof) for the public inputs, or CheckFailed.  With a
+        """The witness of a proof (snarkjs.fflonk_proof) for the public inputs, or CheckFailed.  With a
         binding, the sighash must be the first two public inputs."""
         w = witness(self.vk, proof, pub, self.mode)
         if w is None:
@@ -291,13 +291,11 @@ class Fflonk:
     def pad_for(self, estimate: int, program_bytes: int, witness_bytes: int, slack: int = 64) -> int:
         """The fewest blocks of padding whose budget covers the cost, given the pruned program's and the
         witness's bytes without padding (hand reports them).  The budget is counted low, as for Groth16
-        (Groth16.budget_ok): 1,000 mWU per byte of the program, the witness, the control block and 9 bytes of
+        (budget.budget_ok): 1,000 mWU per byte of the program, the witness, the control block and 9 bytes of
         length prefixes, plus 50,000.  The sizes must be lower bounds: a group taken adds its code to the
         pruned program, which only raises the budget.  `slack` bytes are taken off besides."""
         for blocks in range(2**PAD_GROUPS):
-            if Groth16.budget_ok(
-                self.cost(estimate, blocks), program_bytes - slack, witness_bytes + PAD_BLOCK * blocks
-            ):
+            if budget_ok(self.cost(estimate, blocks), program_bytes - slack, witness_bytes + PAD_BLOCK * blocks):
                 return blocks
         raise CheckFailed('the padding cannot cover the cost')
 
@@ -447,23 +445,7 @@ class Fflonk:
 
     def binding(self, pub: Any) -> E:
         """The first two public inputs are the high and low halves of the sig_all_hash jet's sighash."""
-        be = self.be
-        h = be.jet('sig_all_hash', be.unit(), 256)
-
-        def body(acc, lift):
-            hv = acc[0]
-            out = []
-            for k, half in enumerate(('O', 'I')):
-                x = lift(pub[k])
-                for pth in ('OO', 'OI'):  # the top half of the input is 0
-                    out.append(be.verify(be.jet('eq_64', be.pair(be.sub(x, pth, 64), be.const(64, 0)), 1)))
-                for pth in ('O', 'I'):  # its low half is the sighash's half
-                    out.append(
-                        be.verify(be.jet('eq_64', be.pair(be.sub(x, 'I' + pth, 64), be.sub(hv, half + pth, 64)), 1))
-                    )
-            return be.checks(out)
-
-        return be.let([h], body)
+        return limbs_check(self.be, pub[0], pub[1])
 
     @classmethod
     def compile(

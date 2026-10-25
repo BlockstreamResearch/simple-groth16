@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The transaction binding (groth/groth16.py with depth > 0, groth/merkle.py): the public input is the
+"""The transaction binding (groth/groth16 with depth > 0, groth/core/binding.py): the public input is the
 Merkle root of the sighash and three values.  The harness runs programs in SimplicityHL's dummy
 environment, whose sig_all_hash is DUMMY_SIGHASH (`deploy sighash dummy`).  A wrong sibling and a proof
 for another sighash must be rejected.
@@ -14,12 +14,12 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fp as F
-from groth import merkle
-from groth import pairing as PC
+from groth.core import binding
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core.sym import Num
 from groth.groth16 import Groth16
-from groth.sym import Num
 
 DUMMY_SIGHASH = bytes.fromhex('9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a')
 
@@ -27,9 +27,9 @@ DUMMY_SIGHASH = bytes.fromhex('9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7f
 def main():
     values = [91, 7, 13]  # the public values of the circuit, committed with the sighash
     leaves = [DUMMY_SIGHASH] + values
-    depth = merkle.depth_of(len(leaves))
-    root = merkle.public_signal(merkle.root(leaves))
-    sibs = merkle.siblings(leaves)
+    depth = binding.depth_of(len(leaves))
+    root = binding.public_signal(binding.root(leaves))
+    sibs = binding.siblings(leaves)
     assert len(sibs) == depth == 2 and Groth16.root(DUMMY_SIGHASH, sibs) == root
     vk, proof, inputs = B.groth16_instance(1, seed=11, inputs=[root])
     assert B.groth16_verify(vk, proof, inputs)
@@ -44,9 +44,9 @@ def main():
     bad_sib = dict(wit)
     bad_sib['siblings'] = [wit['siblings'][0] ^ 1, wit['siblings'][1]]
     other = [bytes(32)] + values
-    other_root = merkle.public_signal(merkle.root(other))
+    other_root = binding.public_signal(binding.root(other))
     vk2, proof2, inputs2 = B.groth16_instance(1, seed=11, inputs=[other_root])
-    bad_tx = Groth16(F.Fp(Num()), vk2, b=bnd, depth=depth).witness(proof2, inputs2, bytes(32), merkle.siblings(other))
+    bad_tx = Groth16(F.Fp(Num()), vk2, b=bnd, depth=depth).witness(proof2, inputs2, bytes(32), binding.siblings(other))
     assert bad_tx is not None
     t0 = time.time()
     results = harness.run(

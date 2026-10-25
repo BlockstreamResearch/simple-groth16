@@ -12,12 +12,12 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B
-from groth import fp as F
-from groth import pairing as PC
-from groth.dsl import CheckFailed, Emitter
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core.dsl import CheckFailed, Emitter
+from groth.core.sym import Sym, words
 from groth.groth16 import Groth16
-from groth.sym import Sym, words
 
 
 def parse(expr):

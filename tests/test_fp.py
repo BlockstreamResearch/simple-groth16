@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F_p arithmetic (groth/fp.py): the program against the numeric model, on random words and on words the
+"""F_p arithmetic (groth/core/fp.py): the program against the numeric model, on random words and on words the
 jets must reduce first (at least the secp256k1 field prime or group order, as a spender may give them).
 
 python3 tests/test_fp.py          # tests
@@ -13,9 +13,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import fp as F
-from groth.dsl import Tpairs, wpairs, wv
-from groth.sym import Num, Sym
+from groth.core import fp as F
+from groth.core.dsl import Tpairs, wpairs, wv
+from groth.core.sym import Num, Sym
 
 P = F.P
 

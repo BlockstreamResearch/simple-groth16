@@ -1,6 +1,6 @@
-# Design
+# The Groth16 verifier
 
-This document explains how the verifier checks a Groth16 proof inside a Simplicity program, and why that program is produced by a designated Python generator instead of being written in SimplicityHL.
+This document explains how the verifier checks a Groth16 proof inside a Simplicity program, and why that program is produced by a designated Python generator instead of being written in SimplicityHL. Most of it, the generator's method, the field arithmetic and the pairing check, is shared with the fflonk verifier ([fflonk.md](fflonk.md)).
 
 ## Simplicity in brief
 
@@ -61,15 +61,19 @@ The generator is a Python library, `groth/`, that writes the program as text in 
 
 | module | what it builds |
 |---|---|
-| `dsl.py` | Simplicity text, balanced trees, witness files |
-| `sym.py` | the two backends and the cost model |
-| `fp.py` | BN254 field arithmetic |
-| `poly.py` | F_p12 as polynomials modulo w^12 - 18w^6 + 82 |
-| `curve.py` | on-curve checks, constant tables selected by the bits of a word, the range check of an input |
-| `pairing.py` | the pairing check as one polynomial identity |
-| `groth16.py` | the whole verifier and the transaction binding |
-| `merkle.py` | the public-signal convention |
-| `bn254.py` | the plain-Python reference everything is tested against |
+| `core/dsl.py` | Simplicity text, balanced trees, witness files |
+| `core/sym.py` | the two backends and the cost model |
+| `core/fp.py` | BN254 field arithmetic (F_p, and F_r for fflonk) |
+| `core/poly.py` | F_p12 as polynomials modulo w^12 - 18w^6 + 82 |
+| `core/curve.py` | on-curve checks, constant tables selected by the bits of a word, the range check of an input |
+| `core/pairing.py` | the pairing check as one polynomial identity |
+| `core/binding.py` | the transaction bindings: the public-signal tree, the sighash input, fflonk's limbs |
+| `core/budget.py` | the input's budget |
+| `core/snarkjs.py` | snarkjs's key, proof and public-signal files, with their points checked |
+| `groth16/verifier.py` | the whole verifier |
+| `core/bn254.py` | the plain-Python reference everything is tested against |
+
+The fflonk verifier adds `core/keccak.py`, `core/msm.py`, `core/frprog.py` and `fflonk/`.
 
 The rest of this document follows the layers from the bottom up.
 
@@ -206,11 +210,11 @@ Since the program earns more budget than it costs, the transaction's weight is i
 - Steps of the same kind share their code: a step passes its line constants of δ, one wide constant, to the code of its kind, so a step adds only that constant and the three nodes that pass it. The 7 additions with windows have code of their own.
 - The setup takes -ψ^3(B) from ψ(B) and the Frobenius images from t_n, as above: three constants where it held about fifty.
 
-## Public input and transaction binding (curve.py, merkle.py, groth16.py)
+## Public input and transaction binding (core/curve.py, core/binding.py, groth16/verifier.py)
 
 The public inputs enter through the inputs' term of the pairing check (above): tables of constants of GT, selected by their bits. The inputs are checked to be below the group order. When the program is pruned for a spend, the table entries that were not selected disappear, so the tables cost nothing on chain: a window keeps its entry (128 bytes) and the commitments of the eight branches it did not take (32 bytes each). One public input takes 31 windows and the τ table, 12 kB in all, and costs about 5.7 M mWU; 8 bits is the width with the fewest bytes whose program text still parses in a few minutes.
 
-To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, merkle.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 15 k mWU and the circuit about 59 k constraints per hashed node.
+To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, groth/core/binding.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 15 k mWU and the circuit about 59 k constraints per hashed node.
 
 A circuit that cannot hash, such as a Noir circuit converted to R1CS (docs/noir.md), takes the sighash itself as its first public input instead, masked the same way, and `--sighash-input` makes the program compare it with the jet's: a tree with no siblings. It costs a public input (about 6.6 M mWU) instead of the circuit's hashes, and 253 bits of the sighash are as hard to match as the root's 253.
 

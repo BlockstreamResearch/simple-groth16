@@ -66,7 +66,7 @@ The program's bytes earn more budget than it costs, so it needs no padding.
 The toy circuit:
 
 ```sh
-python3 tools/circom_demo.py setup --frontend noir --out build/noir
+python3 tools/demo.py setup --frontend noir --out build/noir
 tools/harness/target/release/deploy compile build/noir/verifier.simpl build/noir/verifier
 tools/regtest.sh build/noir
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The G1 multi-scalar multiplication of the fflonk verifier (groth/msm.py) against bn254.py.
+"""The G1 multi-scalar multiplication of the fflonk verifier (groth/core/msm.py) against bn254.py.
 
     python3 tests/test_msm.py [quick]
 
@@ -16,12 +16,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fp as F
-from groth import msm as M
-from groth.curve import Curve
-from groth.dsl import Tbalanced, wbalanced, wv
-from groth.sym import Num, Sym, words
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import msm as M
+from groth.core.curve import Curve
+from groth.core.dsl import Tbalanced, wbalanced, wv
+from groth.core.sym import Num, Sym, words
 
 P, R = B.P, B.R
 QUICK = 'quick' in sys.argv[1:]

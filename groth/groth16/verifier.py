@@ -16,12 +16,12 @@ and the pairing check reads each step's leaf and Q from witness nodes of their o
 The public inputs are range-checked (a_i < r).
 
 Transaction binding (depth > 0): the circuit's only public input is the SHA-256 Merkle root of its
-public values, with the sighash of the spending transaction as leaf 0 (merkle.py).  The witness carries
+public values, with the sighash of the spending transaction as leaf 0 (core/binding.py).  The witness carries
 the siblings of leaf 0, and the program recomputes the root from its sig_all_hash jet, so the proof is
 valid for this transaction only.
 
 Binding by the input (sighash_input): the circuit's first public input is the sighash itself, with its top
-three bits cleared like a root (merkle.public_signal), and the program compares it with the jet's: a tree
+three bits cleared like a root (binding.public_signal), and the program compares it with the jet's: a tree
 with no siblings.  The circuit needs no hash, for circuits that cannot compute SHA-256 soundly or cheaply
 (Noir's, converted to R1CS), and may have more public inputs, about 6.6 M mWU and 14 kB each.
 
@@ -33,14 +33,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from . import bn254, merkle, pairing
-from .curve import Curve
-from .dsl import CheckFailed, Tbalanced, WSpec, balanced_paths, ensure, wbalanced, wpair, wv
-from .fp import Fp, Val
-from .pairing import PairingCheck
-from .sym import E, Sym, Term, is_sym, words
-
-SHA_PAD64 = (0x80 << 504) | 512  # the second SHA-256 block of a 64-byte message: 0x80, zeros, the bit length
+from ..core import bn254, pairing
+from ..core.binding import bound_signal, leaf, root_check
+from ..core.curve import Curve
+from ..core.dsl import CheckFailed, Tbalanced, WSpec, balanced_paths, ensure, wbalanced, wpair, wv
+from ..core.fp import Fp, Val
+from ..core.pairing import PairingCheck
+from ..core.sym import E, Sym, Term, is_sym, words
 
 R = bn254.R
 VerifyingKey = dict[str, Any]  # alpha, beta, gamma, delta (bn254 points) and ic (a list of G1 points)
@@ -84,7 +83,7 @@ class Groth16:
         siblings: Sequence[bytes | int] | None = None,
     ) -> dict[str, Any] | None:
         """The witness of the proof (A, B, C) for the public inputs, as a dict; None if the proof does not
-        verify.  With a binding by the tree, also the sighash (leaf 0) and its siblings (merkle.siblings),
+        verify.  With a binding by the tree, also the sighash (leaf 0) and its siblings (binding.siblings),
         which must give the first input; by the input, the sighash, which must be the first input."""
         A, B, C = proof
         ensure(len(inputs) == self.n and all(0 <= a < R for a in inputs), 'public inputs')
@@ -95,14 +94,14 @@ class Groth16:
         if self.depth:
             if sighash is None or siblings is None or len(siblings) != self.depth:
                 raise CheckFailed('the sighash and its siblings')
-            wit['sighash'] = int.from_bytes(merkle.leaf(sighash), 'big')
-            wit['siblings'] = [int.from_bytes(merkle.leaf(x), 'big') for x in siblings]
+            wit['sighash'] = int.from_bytes(leaf(sighash), 'big')
+            wit['siblings'] = [int.from_bytes(leaf(x), 'big') for x in siblings]
             if self.root(wit['sighash'], wit['siblings']) != inputs[0]:
                 return None
         elif self.sighash_input:
             if sighash is None:
                 raise CheckFailed('the sighash')
-            wit['sighash'] = int.from_bytes(merkle.leaf(sighash), 'big')
+            wit['sighash'] = int.from_bytes(leaf(sighash), 'big')
             if self.root(wit['sighash'], []) != inputs[0]:
                 return None
         return wit
@@ -110,10 +109,7 @@ class Groth16:
     @staticmethod
     def root(sighash: bytes | int, siblings: Sequence[bytes | int]) -> int:
         """The public input that the siblings of leaf 0 bind to the sighash."""
-        h = merkle.leaf(sighash)
-        for s in siblings:
-            h = merkle.node(h, merkle.leaf(s))
-        return merkle.public_signal(h)
+        return bound_signal(sighash, siblings)
 
     def _with_siblings(self, main: Any, siblings: Any) -> list[Any]:
         """The parts of w_in: main, and the siblings if there is a binding."""
@@ -188,34 +184,9 @@ class Groth16:
             sighash, sibs = siblings
             ensure(self.root(sighash, sibs) == a1, 'transaction binding failed')
             return 0
-        h = be.jet('sig_all_hash', be.unit(), 256)
-        for s in siblings:
-            h = self.sha256_64(h, s)
-
-        def masked(accs):
-            hv, a = accs
-            top = be.jet('and_8', be.pair(be.sub(hv, 'OOOOO', 8), be.const(8, 0x1F)), 8)
-            m = be.pair(
-                be.pair(
-                    be.pair(
-                        be.pair(be.pair(top, be.sub(hv, 'OOOOI', 8)), be.sub(hv, 'OOOI', 16)), be.sub(hv, 'OOI', 32)
-                    ),
-                    be.sub(hv, 'OI', 64),
-                ),
-                be.sub(hv, 'I', 128),
-            )
-            return be.verify(be.eq256(a, m))
-
-        out = be.scope([h, a1], masked)
+        out = root_check(be, a1, siblings)
         self.parts['binding'] = out.c
         return out
-
-    def sha256_64(self, a: E, b: E) -> E:
-        """SHA-256 of the 64-byte message a || b: two compressions."""
-        be = self.be
-        iv = be.jet('sha_256_iv', be.unit(), 256)
-        m = be.jet('sha_256_block', be.pair(iv, be.pair(a, b)), 256)
-        return be.jet('sha_256_block', be.pair(m, be.const(512, SHA_PAD64)), 256)
 
     def program(self) -> E:
         """Sym: the unit-typed E of the whole verifier over the witness environment."""
@@ -238,13 +209,6 @@ class Groth16:
         ensure(len(nodes) == 2 + pairing.N_STEPS, 'the witness nodes')
         ensure(all(uses.get(name) == 1 for name in nodes), 'a witness node is read more than once')
         return be.em.text(), g, 2 * (100 + g.witness_bits()) + body.c
-
-    @staticmethod
-    def budget_ok(cost: int, program_bytes: int, witness_bytes: int) -> bool:
-        """The input's budget, 1000 mWU per byte of its witness stack plus 50, covers the cost.  The stack is
-        counted low: the program, the witness, the control block (33 bytes) and 9 bytes of length prefixes,
-        without the CMR's 32 bytes."""
-        return cost <= 1000 * (program_bytes + witness_bytes + 33 + 9 + 50)
 
 
 def _words_type(n: int) -> str:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The fflonk verifier (groth/fflonk.py) on the snarkjs 0.7.6 proofs in examples/fflonk.
+"""The fflonk verifier (groth/fflonk/verifier.py) on the snarkjs 0.7.6 proofs in examples/fflonk.
 
     python3 tests/test_fflonk.py [quick] [keccak|sha256]
 
@@ -11,7 +11,7 @@ public input, an inverse hint, a column word, the fixed-base scalar, an MSM hint
 or its G2 slot, and a valid proof for another sighash.  `quick` skips the programs.
 
 The proofs bind the harness's dummy sighash (DUMMY_SIGHASH): circuits/multiplier_fflonk.circom with
-a = 3, b = 7, made by tools/circom_demo.py (the SHA-256 one by tools/snarkjs_sha256.mjs).
+a = 3, b = 7, made by tools/demo.py (the SHA-256 one by tools/snarkjs_sha256.mjs).
 """
 
 import copy
@@ -23,13 +23,14 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fflonk as FF
-from groth import fflonk_ref as ref
-from groth import pairing as PC
-from groth.dsl import CheckFailed
-from groth.fp import Fp
-from groth.sym import Num
+from groth.core import bn254 as B
+from groth.core import pairing as PC
+from groth.core import snarkjs
+from groth.core.dsl import CheckFailed
+from groth.core.fp import Fp
+from groth.core.sym import Num
+from groth.fflonk import reference as ref
+from groth.fflonk import verifier as FF
 
 EX = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'examples', 'fflonk')
 DUMMY_SIGHASH = bytes.fromhex('9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a')
@@ -43,9 +44,9 @@ def load(name):
         return json.load(f)
 
 
-VK = ref.load_vk(load('verification_key.json'))
+VK = snarkjs.fflonk_key(load('verification_key.json'))
 PUB = [int(x) for x in load('public.json')]
-PROOFS = {m: ref.load_proof(load(f'proof_{m}.json')) for m in ref.MODES}
+PROOFS = {m: snarkjs.fflonk_proof(load(f'proof_{m}.json')) for m in ref.MODES}
 
 
 def reference():
@@ -115,7 +116,7 @@ def program(mode):
         pass
     bad = tampered(g, w)
     if mode == 'keccak':  # a valid proof, for another transaction
-        other = ref.load_proof(load('proof_keccak_other_sighash.json'))
+        other = snarkjs.fflonk_proof(load('proof_keccak_other_sighash.json'))
         pub2 = [int(x) for x in load('public_other_sighash.json')]
         bad.append(('another sighash', g.witness(other, pub2, bytes(32))))
     # padding as if the pruned program were 50 kB, less than it is: more padding than it needs, so the
@@ -134,7 +135,7 @@ def program(mode):
     r = harness.expect_ok(results[0], f'fflonk {mode}')
     assert r['cost'] == g.cost(estimate, 0), (r['cost'], g.cost(estimate, 0))
     rp = harness.expect_ok(results[1], f'fflonk {mode}, padded')
-    budget = (rp['program_bytes'] + rp['witness_bytes'] + 33 + 9 + 50) * 1000  # as Groth16.budget_ok counts it
+    budget = (rp['program_bytes'] + rp['witness_bytes'] + 33 + 9 + 50) * 1000  # as budget.budget_ok counts it
     assert rp['cost'] == g.cost(estimate, pad) <= budget, (rp['cost'], g.cost(estimate, pad), budget)
     for (label, _), res in zip(bad, results[2:]):
         harness.expect_rejected(res, f'fflonk {mode}: {label}')

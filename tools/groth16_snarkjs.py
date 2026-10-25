@@ -14,7 +14,7 @@ spending transaction.  The witness needs --leaves, a JSON file {"sighash": "<64 
 ["<decimal>", ...]}, which also gives N.
 
 --sighash-input (in place of --values and --leaves): the circuit's first public signal is the sighash of
-the spending transaction with its top three bits cleared (merkle.public_signal, as for a root), which the
+the spending transaction with its top three bits cleared (binding.public_signal, as for a root), which the
 program compares with the transaction's, and every public signal is a verifier input (about 6.6 M mWU and
 14 kB each).  For circuits that cannot compute the Merkle root, such as Noir circuits converted to R1CS
 (tools/noir_r1cs.py, circuits/noir/multiplier).  `witness` needs the sighash itself (--sighash), since
@@ -32,12 +32,13 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from groth import bn254 as B
-from groth import fp as F
-from groth import merkle
-from groth import pairing as PC
+from groth.core import binding, snarkjs
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core.dsl import CheckFailed
+from groth.core.sym import Num
 from groth.groth16 import Groth16
-from groth.sym import Num
 
 
 def need(ok, msg):
@@ -46,25 +47,12 @@ def need(ok, msg):
         sys.exit(f'groth16_snarkjs.py: {msg}')
 
 
-def g1(pt):
-    x, y, z = (int(v) for v in pt)
-    need(z != 0, 'point at infinity')
-    if z != 1:
-        zi = pow(z, -1, B.P)
-        x, y = x * zi % B.P, y * zi % B.P
-    need(B.g1_on_curve(x, y), 'G1 point not on the curve')
-    return (x, y)
-
-
-def g2(pt):
-    x, y, z = (B.Fp2(int(v[0]), int(v[1])) for v in pt)
-    need(not z.is_zero(), 'point at infinity')
-    if z != B.Fp2(1):
-        zi = z.inv()
-        x, y = x * zi, y * zi
-    need(B.g2_on_curve(x, y), 'G2 point not on the twist')
-    need(B.g2_in_subgroup((x, y)), 'G2 point not in the order-r subgroup')
-    return (x, y)
+def refusing(f, path):
+    """f(the JSON at path), with a failed check (groth/core/snarkjs.py) as a refusal."""
+    try:
+        return f(snarkjs.load(path))
+    except CheckFailed as e:
+        sys.exit(f'groth16_snarkjs.py: {path}: {e}')
 
 
 def load_json(path):
@@ -73,29 +61,15 @@ def load_json(path):
 
 
 def load_vk(path):
-    j = load_json(path)
-    need(j.get('protocol') == 'groth16' and j.get('curve') in ('bn128', 'bn254'), 'not a snarkjs groth16/bn128 key')
-    vk = {
-        'alpha': g1(j['vk_alpha_1']),
-        'beta': g2(j['vk_beta_2']),
-        'gamma': g2(j['vk_gamma_2']),
-        'delta': g2(j['vk_delta_2']),
-        'ic': [g1(p) for p in j['IC']],
-    }
-    need(len(vk['ic']) == j.get('nPublic', -1) + 1, 'the key has IC points for a different number of public signals')
-    return vk
+    return refusing(snarkjs.groth16_key, path)
 
 
 def load_proof(path):
-    j = load_json(path)
-    need(j.get('protocol') == 'groth16' and j.get('curve') in ('bn128', 'bn254'), 'not a snarkjs groth16/bn128 proof')
-    return (g1(j['pi_a']), g2(j['pi_b']), g1(j['pi_c']))
+    return refusing(snarkjs.groth16_proof, path)
 
 
 def load_public(path):
-    inputs = [int(v) for v in load_json(path)]
-    need(all(0 <= v < B.R for v in inputs), 'a public signal is not below r')
-    return inputs
+    return refusing(snarkjs.public_signals, path)
 
 
 def load_leaves(path):
@@ -108,7 +82,7 @@ def load_leaves(path):
 
 
 def binding_depth(n, n_values, leaf_values, unbound):
-    """The depth of the public-signal tree: merkle.depth_of(N + 1) for a bound circuit with N values
+    """The depth of the public-signal tree: binding.depth_of(N + 1) for a bound circuit with N values
     (--values N, or the values of --leaves), 0 only with an explicit --unbound."""
     if leaf_values is not None:
         need(
@@ -122,7 +96,7 @@ def binding_depth(n, n_values, leaf_values, unbound):
         return 0
     need(n_values >= 0, '--values is at least 0')
     need(n == 1, f'a bound circuit has one public signal, the key has {n}')
-    return merkle.depth_of(n_values + 1)
+    return binding.depth_of(n_values + 1)
 
 
 def main(argv=None):
@@ -158,13 +132,13 @@ def main(argv=None):
         with open(a.out + '.simpl', 'w') as f:
             f.write(text)
         if by_input:
-            binding = 'bound to the transaction (the first public signal is the sighash)'
+            bound = 'bound to the transaction (the first public signal is the sighash)'
         elif depth:
-            binding = f'bound to the transaction (tree depth {depth})'
+            bound = f'bound to the transaction (tree depth {depth})'
         else:
-            binding = 'NOT bound to the transaction (--unbound)'
+            bound = 'NOT bound to the transaction (--unbound)'
         print(
-            f'wrote {a.out}.simpl: {n} public input{"s" if n > 1 else ""}, {binding}, '
+            f'wrote {a.out}.simpl: {n} public input{"s" if n > 1 else ""}, {bound}, '
             f'cost bound {cost:,} mWU ({time.time() - t0:.0f}s)'
         )
         return
@@ -178,7 +152,7 @@ def main(argv=None):
         wit = g.witness(proof, inputs, sighash)
     elif depth:
         need(bool(a.leaves), '--leaves is needed for a bound circuit')
-        sibs = merkle.siblings([sighash] + values)
+        sibs = binding.siblings([sighash] + values)
         need(Groth16.root(sighash, sibs) == inputs[0], 'the leaves do not give the public signal')
         wit = g.witness(proof, inputs, sighash, sibs)
     else:

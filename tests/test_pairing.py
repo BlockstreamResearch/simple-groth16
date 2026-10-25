@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The pairing check as one polynomial identity (groth/pairing.py), on an instance with
+"""The pairing check as one polynomial identity (groth/core/pairing.py), on an instance with
 e(A, B) e(L, gamma) e(C, delta) e(alpha, beta) = 1, L = IC_0 + x IC_1 for a public input x.  The model's
 S(z) must equal Q(z) M(z), the program must accept, and it must reject witnesses that are wrong in one
 place but sealed consistently (r, Q and z recomputed), so that only the identity can catch them: a wrong
@@ -18,12 +18,12 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fp as F
-from groth import pairing as PC
-from groth import poly
-from groth.dsl import CheckFailed, Tbalanced, wbalanced, wpair, wv
-from groth.sym import Num, Sym, words
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core import poly
+from groth.core.dsl import CheckFailed, Tbalanced, wbalanced, wpair, wv
+from groth.core.sym import Num, Sym, words
 
 P = F.P
 

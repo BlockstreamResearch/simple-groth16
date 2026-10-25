@@ -65,16 +65,16 @@ example-uprog: example harness
 # tools/regtest.sh spends it)
 fflonk-demo: harness
 	for t in keccak sha256; do \
-		$(PYTHON) tools/circom_demo.py setup --protocol fflonk --transcript $$t --out build/fflonk_$$t && \
-		$(PYTHON) tools/circom_demo.py prove --out build/fflonk_$$t \
+		$(PYTHON) tools/demo.py setup --protocol fflonk --transcript $$t --out build/fflonk_$$t && \
+		$(PYTHON) tools/demo.py prove --out build/fflonk_$$t \
 			--sighash 9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a || exit 1; \
 	done
 
 # the Noir toy circuit for Groth16, setup and prove for the harness's dummy sighash (no node: tools/regtest.sh
 # spends it)
 noir-demo: harness
-	$(PYTHON) tools/circom_demo.py setup --frontend noir --out build/noir
-	$(PYTHON) tools/circom_demo.py prove --out build/noir \
+	$(PYTHON) tools/demo.py setup --frontend noir --out build/noir
+	$(PYTHON) tools/demo.py prove --out build/noir \
 		--sighash 9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a
 
 lint:

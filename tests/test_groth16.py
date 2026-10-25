@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The whole verifier (groth/groth16.py) on a synthetic key.  A wrong public input and a tampered proof
+"""The whole verifier (groth/groth16/verifier.py) on a synthetic key.  A wrong public input and a tampered proof
 must be rejected, with the challenges as they were and sealed again (anyone can recompute r, Q and z),
 and so must an input above r that the tables alone cannot tell from the right one.  The budget of the
 input must cover the cost.
@@ -15,12 +15,13 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fp as F
-from groth import pairing as PC
-from groth.dsl import CheckFailed
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core.budget import budget_ok
+from groth.core.dsl import CheckFailed
+from groth.core.sym import Num
 from groth.groth16 import Groth16
-from groth.sym import Num
 
 
 def values_for(g, proof, xs):
@@ -130,7 +131,7 @@ def main():
     for name, cst in rows:
         print(f'{name:48} {cst:>12,}')
     # the budget of the input (program + witness bytes + 50, times 1000) must cover the cost
-    assert Groth16.budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), 'budget'
+    assert budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), 'budget'
     weight = r['program_bytes'] + r['witness_bytes'] + 33 + 9
     print(
         f'cost {r["cost"]:,} mWU, program {r["program_bytes"]:,} B + witness {r["witness_bytes"]:,} B: '

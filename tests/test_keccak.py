@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keccak-f[1600] and Keccak-256 in Simplicity (groth/keccak.py).
+"""Keccak-f[1600] and Keccak-256 in Simplicity (groth/core/keccak.py).
 
 The reference permutation is checked against hashlib's SHA3-256 (the same permutation), and Keccak-256
 against known digests.  The programs run in hand: the permutation of a random state, and Keccak-256 of
@@ -17,9 +17,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import keccak as K
-from groth.dsl import Tbalanced, wbalanced, wv
-from groth.sym import E, Num, Sym
+from groth.core import keccak as K
+from groth.core.dsl import Tbalanced, wbalanced, wv
+from groth.core.sym import E, Num, Sym
 
 
 def reference():

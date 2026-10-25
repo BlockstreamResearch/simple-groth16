@@ -1,12 +1,25 @@
 # Simple Groth16
 
-A Groth16 verifier written on [Simplicity](https://github.com/BlockstreamResearch/simplicity). A proof made with [circom](https://docs.circom.io) and [snarkjs](https://github.com/iden3/snarkjs) can spend a Liquid TX output.
+SNARK verifiers written on [Simplicity](https://github.com/BlockstreamResearch/simplicity): a proof made with [circom](https://docs.circom.io) or [Noir](https://noir-lang.org), and [snarkjs](https://github.com/iden3/snarkjs), can spend a Liquid TX output. Two verifiers share one generator: Groth16, the cheaper one, and fflonk, whose setup is universal.
 
 > ⚠️ The library is highly experimental and has not been audited. Don't use it in production! To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-## TL;DR
+## What it supports
 
-The library provides a Python generator which compiles a Groth16 verifying key into a Simplicity program that checks 
+| | Groth16 ([docs](docs/groth16.md)) | fflonk ([docs](docs/fflonk.md)) |
+|---|---|---|
+| setup | per circuit: snarkjs's phase 2 on a powers of tau | universal: the powers of tau alone |
+| circom circuits | yes: bound by the Merkle root of the public values | yes: bound by the sighash as two public inputs |
+| Noir circuits ([docs](docs/noir.md)) | yes: bound by the sighash as the first public input | possible, with the sighash as two limbs (no demo) |
+| proofs | snarkjs `groth16` | snarkjs `fflonk` (Keccak-256 transcript), or `tools/snarkjs_sha256.mjs` (SHA-256) |
+| cost, toy circuit | 48.6 M mWU (circom), 55.3 M mWU (Noir) | 123.2 M mWU (SHA-256), 172.0 M mWU (Keccak), before padding |
+| transaction | 53.3 kWU (circom), 67.8 kWU (Noir) | 126.6 kWU (SHA-256), 185.3 kWU (Keccak) |
+
+Groth16's program earns more budget than it costs. fflonk's costs more than its program and witness weigh, so a spend pads its witness. All of them fit under the 400 kWU standard limit.
+
+## How the Groth16 verifier fits
+
+The generator compiles a Groth16 verifying key into a Simplicity program that checks
 
 $$e(A, B) = e(\alpha, \beta) * e(L, \gamma) * e(C, \delta).$$
 
@@ -19,18 +32,7 @@ Simplicity has no pairing jets, so we applied a bunch of tricks to fit Groth16 v
 - The key is compiled in. The lines of delta are constants; gamma and the IC points become lookup tables of pairing values, since $e(L, \gamma) = e(IC_0, \gamma) \prod_i e(IC_i, \gamma)^{a_i}$, so L is never computed; and $e(\alpha, \beta)$ is folded into the final comparison.
 - The circuit requires a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0. The program recomputes that root from its `sig_all_hash` jet, so a proof spends exactly one transaction and cannot be replayed or redirected.
 
-[Design document](docs/design.md) explains each part in more detail.
-
-## Cost
-
-| | |
-|---|---|
-| program cost, one public signal | 48.6 M mWU |
-| transaction | 53.3 kWU, 13.3 kvB |
-| pruned program / witness | 34 kB / 18 kB |
-| fee at 0.115 sat/vB | ~ 1,500 sat |
-
-The program's bytes earn more budget than it costs, so it needs no padding. The transaction is about a seventh of the 400 kWU standard limit.
+The fflonk verifier reuses the field arithmetic and the pairing check, and adds a Keccak-256 transcript, F_r arithmetic for the opening and a G1 multi-scalar multiplication with hints ([docs/fflonk.md](docs/fflonk.md)).
 
 ## Quick start
 
@@ -38,6 +40,7 @@ Requirements:
 - Python 3.10 or later (no packages) and Rust. 
 - The circuits require [circom 2](https://github.com/iden3/circom/releases), Node.js 22 or later
 - [Elements Core](https://github.com/ElementsProject/elements/releases) 23.3. 
+- Noir circuits require nargo 1.0.0-beta.19 and Noir-Groth16's `noir-cli` ([docs/noir.md](docs/noir.md)).
 
 > Tested with rust-simplicity 0.9.0, Elements Core 23.3.1, circom 2.2.2, snarkjs 0.7.6, Python 3.10 to 3.14 and Node.js 22.
 
@@ -60,7 +63,7 @@ Each test generates programs for one layer, runs them through `hand` (which exec
 
    ```sh
    cd circuits && npm ci --ignore-scripts && cd ..
-   python3 tools/circom_demo.py setup --out build/multiplier
+   python3 tools/demo.py setup --out build/multiplier
    D=tools/harness/target/release/deploy
    $D compile build/multiplier/verifier.simpl build/multiplier/verifier 
    ```
@@ -84,7 +87,7 @@ Each test generates programs for one layer, runs them through `hand` (which exec
 4. Prove with that sighash. This also checks the proof and writes the verifier's witness:
 
    ```sh
-   python3 tools/circom_demo.py prove --out build/multiplier --sighash <sighash> --a 3 --b 7
+   python3 tools/demo.py prove --out build/multiplier --sighash <sighash> --a 3 --b 7
    ```
 
 5. Build the transaction and send it:
@@ -117,7 +120,7 @@ The program sees only the root, not the values behind it. A contract that must a
 The repository also has a verifier for snarkjs's fflonk proofs ([docs/fflonk.md](docs/fflonk.md)). fflonk's setup is universal: a circuit needs only a powers-of-tau file, with no ceremony of its own. Its verifier costs more than Groth16's: 123 M mWU with a SHA-256 transcript (proofs from `tools/snarkjs_sha256.mjs`) or 172 M with snarkjs's own Keccak-256 transcript, and a spend pads its witness to pay for it.
 
 ```sh
-python3 tools/circom_demo.py setup --protocol fflonk --transcript sha256 --out build/fflonk
+python3 tools/demo.py setup --protocol fflonk --transcript sha256 --out build/fflonk
 tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/fflonk/verifier
 tools/regtest.sh build/fflonk   # an Elements regtest node: spend, a redirected spend rejected, key path
 ```
@@ -127,7 +130,7 @@ tools/regtest.sh build/fflonk   # an Elements regtest node: spend, a redirected 
 A [Noir](https://noir-lang.org) circuit can use the Groth16 verifier too ([docs/noir.md](docs/noir.md)). `tools/noir_r1cs.py` compiles it with nargo and converts it to R1CS with [Noir-Groth16](https://github.com/jamesbachini/Noir-Groth16)'s `noir-cli`, refusing opcodes the converter does not lower soundly, Keccak among them. snarkjs then makes the key and the proofs, as for circom. The circuit takes the sighash as its first public input (`groth16_snarkjs.py --sighash-input`), so it needs no hash: the toy circuit costs 55.3 M mWU with its two public inputs.
 
 ```sh
-python3 tools/circom_demo.py setup --frontend noir --out build/noir
+python3 tools/demo.py setup --frontend noir --out build/noir
 tools/harness/target/release/deploy compile build/noir/verifier.simpl build/noir/verifier
 tools/regtest.sh build/noir
 ```
@@ -136,13 +139,15 @@ tools/regtest.sh build/noir
 
 | | |
 |---|---|
-| `groth/` | the generator: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py`, `poly.py`, `curve.py`, `pairing.py`, `groth16.py` (one layer each), `merkle.py` (the public signal); for fflonk, `keccak.py`, `msm.py`, `frprog.py` (F_r straight-line code), `fflonk_ref.py` (the port of snarkjs's verifier) and `fflonk.py` |
+| `groth/core/` | what both verifiers use: `bn254.py` (plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py` (F_p and F_r), `poly.py`, `curve.py`, `pairing.py`, `msm.py`, `frprog.py` (F_r straight-line code), `keccak.py`, `snarkjs.py` (snarkjs's files), `binding.py` (the transaction bindings), `budget.py` |
+| `groth/groth16/` | the Groth16 verifier |
+| `groth/fflonk/` | the fflonk verifier, and `reference.py`, the port of snarkjs's verifier |
 | `circuits/` | `public_merkle.circom` (the public-signal convention), the toy `multiplier.circom`, `multiplier_fflonk.circom` for fflonk, and `noir/multiplier`, the toy statement in Noir |
 | `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` and `sizes` profile them, `deploy` builds addresses and transactions |
-| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (snarkjs key and proof to program and witness), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `noir_r1cs.py` (a Noir circuit as R1CS), `circom_demo.py` and `regtest.sh` |
+| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (snarkjs key and proof to program and witness), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `noir_r1cs.py` (a Noir circuit as R1CS), `demo.py` (the toy circuits end to end) and `regtest.sh` |
 | `tests/` | tests (plus `test_bn254_ref.py` against py_ecc) |
 | `examples/` | generated programs |
-| `docs/` | design notes and benchmarks |
+| `docs/` | `groth16.md`, `fflonk.md`, `noir.md` (how each works), `benchmarks.md` |
 | `Makefile`, `pyproject.toml` | development tasks, the linters' configuration |
 
 The repository has no hand-written Simplicity: each verifying key gives a different program (2.8 MB of text for the toy circuit), which the tools write into `build/`.

@@ -1,6 +1,6 @@
 pragma circom 2.0.0;
 
-// The toy statement for the fflonk verifier (groth/fflonk.py): the prover knows a and b with a * b = c.
+// The toy statement for the fflonk verifier (groth/fflonk/verifier.py): the prover knows a and b with a * b = c.
 //
 // The public inputs are the sighash of the spending transaction, as two 128-bit limbs (high, then low),
 // then c.  The verifier compares the first two with its sig_all_hash jet, so a proof is valid for one

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The verifier of keys with more public inputs (groth/groth16.py): the program is generated within the
+"""The verifier of keys with more public inputs (groth/groth16/verifier.py): the program is generated within the
 bounds of the field arithmetic, and its numeric model accepts a proof and rejects a wrong input, also when
 r, Q and z are sealed again so that the identity is what rejects it.  With three or more inputs, some
 additions carry ten or more windows, whose factors' product is normalised partway (PairingCheck.prod).
@@ -19,12 +19,12 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import harness
 
-from groth import bn254 as B
-from groth import fp as F
-from groth import pairing as PC
-from groth.dsl import CheckFailed, Tbalanced, wbalanced, wv
+from groth.core import bn254 as B
+from groth.core import fp as F
+from groth.core import pairing as PC
+from groth.core.dsl import CheckFailed, Tbalanced, wbalanced, wv
+from groth.core.sym import Num, Sym, flat, words
 from groth.groth16 import Groth16
-from groth.sym import Num, Sym, flat, words
 
 
 def rejected(g, w, label):

@@ -6,7 +6,7 @@ PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive pyt
 whose leaves do not give the public signal is refused, as is one whose sighash is not the first public
 signal (--sighash-input).  tools/fflonk_snarkjs.py: --bind or --unbound is
 required, a key point off the curve is refused under python -O, and so is a proof for the other
-transcript.  tools/circom_demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the
+transcript.  tools/demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the
 recorded one, whether it is cached or downloaded, and fflonk takes the smallest recorded size that is
 large enough.
 
@@ -107,7 +107,7 @@ def check_sighash_input(T, tmp):
 
 
 def check_ptau(tmp):
-    D = load('circom_demo')
+    D = load('demo')
     D.snarkjs = lambda *a, **kw: types.SimpleNamespace(stdout='# of Constraints: 5\n')  # 2^3 >= 5 + 2
     good, bad = b'the recorded powers of tau', b'another powers of tau'
     D.PTAU_BLAKE2B = {3: hashlib.blake2b(good, digest_size=64).hexdigest()}
@@ -172,7 +172,7 @@ def check_fflonk(tmp):
 
 def check_ptau_fflonk(tmp):
     """fflonk needs 9 times its domain; a larger recorded size serves, and is taken."""
-    D = load('circom_demo')
+    D = load('demo')
     info = '# of Constraints: 2\n# of Public Inputs: 3\n# of Outputs: 0\n'  # needs 2^9
     D.snarkjs = lambda *a, **kw: types.SimpleNamespace(stdout=info)
     good = b'the recorded powers of tau of size 2^16'

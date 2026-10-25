@@ -15,7 +15,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["groth"]
+packages = ["groth", "groth.core", "groth.groth16", "groth.fflonk"]
 
 [tool.ruff]
 line-length = 120

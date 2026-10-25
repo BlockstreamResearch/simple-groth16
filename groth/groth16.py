@@ -20,7 +20,12 @@ public values, with the sighash of the spending transaction as leaf 0 (merkle.py
 the siblings of leaf 0, and the program recomputes the root from its sig_all_hash jet, so the proof is
 valid for this transaction only.
 
-The witness node w_in is the balanced pair of main and, with a binding, the siblings.
+Binding by the input (sighash_input): the circuit's first public input is the sighash itself, with its top
+three bits cleared like a root (merkle.public_signal), and the program compares it with the jet's: a tree
+with no siblings.  The circuit needs no hash, for circuits that cannot compute SHA-256 soundly or cheaply
+(Noir's, converted to R1CS), and may have more public inputs, about 6.6 M mWU and 14 kB each.
+
+The witness node w_in is the balanced pair of main and, with a binding by the tree, the siblings.
 """
 
 from __future__ import annotations
@@ -44,15 +49,24 @@ Proof = tuple[bn254.G1Point, bn254.G2Point, bn254.G1Point]
 
 class Groth16:
     """Generator of the verifier of vk = dict(alpha, beta, gamma, delta, ic) (bn254 points).  b:
-    pairing.bounds(); depth: depth of the public-signal Merkle tree (0: no transaction binding)."""
+    pairing.bounds(); depth: depth of the public-signal Merkle tree; sighash_input: the first public input
+    is the sighash instead (depth 0 and no sighash_input: no transaction binding)."""
 
-    def __init__(self, fp: Fp, vk: VerifyingKey, b: dict[str, int] | None = None, depth: int = 0) -> None:
+    def __init__(
+        self,
+        fp: Fp,
+        vk: VerifyingKey,
+        b: dict[str, int] | None = None,
+        depth: int = 0,
+        sighash_input: bool = False,
+    ) -> None:
         self.fp, self.be = fp, fp.be
         self.cv = Curve(fp)
-        self.vk, self.depth = vk, depth
+        self.vk, self.depth, self.sighash_input = vk, depth, sighash_input
         self.n = len(vk['ic']) - 1
         ensure(self.n >= 1, 'the key has no public input')
         ensure(depth >= 0 and (depth == 0 or self.n == 1), 'a bound circuit has one public signal')
+        ensure(not (sighash_input and depth), 'one binding: by the tree or by the input')
         self.pc = PairingCheck(
             fp,
             vk['delta'],
@@ -70,8 +84,8 @@ class Groth16:
         siblings: Sequence[bytes | int] | None = None,
     ) -> dict[str, Any] | None:
         """The witness of the proof (A, B, C) for the public inputs, as a dict; None if the proof does not
-        verify.  With a binding, also the sighash (leaf 0) and its siblings (merkle.siblings), which must
-        give the first input."""
+        verify.  With a binding by the tree, also the sighash (leaf 0) and its siblings (merkle.siblings),
+        which must give the first input; by the input, the sighash, which must be the first input."""
         A, B, C = proof
         ensure(len(inputs) == self.n and all(0 <= a < R for a in inputs), 'public inputs')
         wit = self.pc.prover.witness([(bn254.g1_neg(A), B), (C, self.vk['delta'])], inputs)
@@ -84,6 +98,12 @@ class Groth16:
             wit['sighash'] = int.from_bytes(merkle.leaf(sighash), 'big')
             wit['siblings'] = [int.from_bytes(merkle.leaf(x), 'big') for x in siblings]
             if self.root(wit['sighash'], wit['siblings']) != inputs[0]:
+                return None
+        elif self.sighash_input:
+            if sighash is None:
+                raise CheckFailed('the sighash')
+            wit['sighash'] = int.from_bytes(merkle.leaf(sighash), 'big')
+            if self.root(wit['sighash'], []) != inputs[0]:
                 return None
         return wit
 
@@ -120,9 +140,10 @@ class Groth16:
 
     def num_input(self, wit: dict[str, Any]) -> list[Any]:
         """The witness dict as the nested value `verify` takes on the numeric backend."""
-        return self._with_siblings(
-            [wit['scalars'], pairing.witness_num(wit)], [wit.get('sighash'), wit.get('siblings')]
-        )
+        main = [wit['scalars'], pairing.witness_num(wit)]
+        if self.sighash_input:
+            return [main, wit['sighash']]
+        return self._with_siblings(main, [wit.get('sighash'), wit.get('siblings')])
 
     # the verifier
     def verify(self, acc: Any) -> Term:
@@ -136,6 +157,10 @@ class Groth16:
             out = self.checks(acc[0])
         if self.depth:
             bind = self.binding(acc[0][0][0], acc[1])
+            if is_sym(be):
+                out = be.checks([out, bind])
+        elif self.sighash_input:  # a tree of the sighash alone
+            bind = self.binding(acc[0][0][0], [] if is_sym(be) else (acc[1], []))
             if is_sym(be):
                 out = be.checks([out, bind])
         return out if is_sym(be) else 0
@@ -198,10 +223,12 @@ class Groth16:
         return self.verify(self.be._unpack('', self.witness_shape()))
 
     @classmethod
-    def compile(cls, vk: VerifyingKey, depth: int = 0, b: dict[str, int] | None = None) -> tuple[str, Groth16, int]:
+    def compile(
+        cls, vk: VerifyingKey, depth: int = 0, b: dict[str, int] | None = None, sighash_input: bool = False
+    ) -> tuple[str, Groth16, int]:
         """The verifier of a key: (program text, its generator, cost bound in mWU)."""
         be = Sym(0)
-        g = cls(Fp(be), vk, b=b or pairing.bounds(), depth=depth)
+        g = cls(Fp(be), vk, b=b or pairing.bounds(), depth=depth, sighash_input=sighash_input)
         body = g.program()
         be.em.define('w_in', 'witness', f'_ -> {g.witness_type()}')
         be.em.define('main', f'comp w_in ({body.t})')

@@ -4,13 +4,14 @@ HARNESS := tools/harness
 E := examples/multiplier
 # the tests that run programs through the harness (inputs2: the verifier of a key with two public inputs;
 # inputs: keys with 3 to 5, in the numeric model and, for the window factors, in the harness;
-# fflonk_keccak, fflonk_sha256: the fflonk verifier in each transcript mode)
-HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm fflonk_keccak fflonk_sha256
+# fflonk_keccak, fflonk_sha256: the fflonk verifier in each transcript mode; noir: the Groth16 verifier of
+# a Noir circuit, bound by its first public input)
+HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm fflonk_keccak fflonk_sha256 noir
 # and the plain-Python ones: poly, invariants (what the generator refuses), tools (what the command-line
 # tools refuse), and bn254_ref, which checks the reference against py_ecc
 TESTS := $(HARNESS_TESTS) poly invariants tools
 
-.PHONY: help harness test $(addprefix test-,$(TESTS)) test-bn254_ref bench example example-uprog fflonk-demo lint fmt
+.PHONY: help harness test $(addprefix test-,$(TESTS)) test-bn254_ref bench example example-uprog fflonk-demo noir-demo lint fmt
 
 help:
 	@echo 'make harness    build tools/harness (hand, deploy, costs, sizes)'
@@ -20,6 +21,7 @@ help:
 	@echo 'make example    check that the files in examples/ regenerate byte for byte'
 	@echo 'make example-uprog  and that deploy compile gives the committed .uprog and .wnames (minutes)'
 	@echo 'make fflonk-demo  the fflonk toy circuit in both transcript modes, setup and prove (circom, node)'
+	@echo 'make noir-demo  the Noir toy circuit for Groth16, setup and prove (nargo, noir-cli, node)'
 	@echo 'make lint       ruff, mypy, cargo fmt and clippy, as CI runs them'
 	@echo 'make fmt        format the Python and the Rust code'
 
@@ -67,6 +69,13 @@ fflonk-demo: harness
 		$(PYTHON) tools/circom_demo.py prove --out build/fflonk_$$t \
 			--sighash 9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a || exit 1; \
 	done
+
+# the Noir toy circuit for Groth16, setup and prove for the harness's dummy sighash (no node: tools/regtest.sh
+# spends it)
+noir-demo: harness
+	$(PYTHON) tools/circom_demo.py setup --frontend noir --out build/noir
+	$(PYTHON) tools/circom_demo.py prove --out build/noir \
+		--sighash 9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a
 
 lint:
 	ruff check .

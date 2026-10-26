@@ -111,14 +111,14 @@ A version for two fixed G2 points would save B's slope relations, about 15 M.
 
 The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. The verifier costs more than its program and witness weigh, so a spend adds zero blocks of 512 bytes to the witness. A block costs 0.05 to 0.12 M mWU to check, depending on its group, and earns 0.51 M.
 
-How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`Groth16.budget_ok`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size. What it measures is a lower bound, since the groups taken add their code, so the budget it predicts is one too.
+How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size. What it measures is a lower bound, since the groups taken add their code, so the budget it predicts is one too.
 
 ## Soundness
 
 - Every hint is checked: inverses by a product, slopes and inverses by the group-law relations, the column words and v by their relation to the scalars in F_r.
 - Every hint word is below 2^254 (two bits checked), so its products stay within the CRT bound.
 - Each witness node is read once in the program's tree unfolding (`Fflonk.compile` checks it), so a spender who unshares a node cannot give its copies different values.
-- The challenges are recomputed from the transcript. The evaluations, the public inputs and the challenge words must be canonical, which is stricter than snarkjs: snarkjs reduces an evaluation mod r.
+- The challenges are recomputed from the transcript. The evaluations, the public inputs and the challenge words must be canonical, which is stricter than snarkjs: snarkjs reduces an evaluation mod r. `fflonk_snarkjs.py` reads proof.json as snarkjs does (each evaluation a decimal string below 2^256, reduced mod r), so the witness it writes holds the canonical words.
 - The pairing check's soundness is as `docs/groth16.md` explains, and the program checks its G2 slot and both G1 slots.
 - A proof with a commitment at the point at infinity has no witness. snarkjs would accept one, but an honest prover produces one with negligible probability.
 - The key is compiled in, so it is trusted as the deployer's: `snarkjs.fflonk_key` checks that its points are on the curves and X_2 in the order-r subgroup, nothing more.

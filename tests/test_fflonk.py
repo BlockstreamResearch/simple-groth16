@@ -3,7 +3,7 @@
 
     python3 tests/test_fflonk.py [quick] [keccak|sha256]
 
-The plain-Python port (fflonk_ref.py) accepts each proof in its transcript's mode and rejects it in the
+The plain-Python port (groth/fflonk/reference.py) accepts each proof in its transcript's mode and rejects it in the
 other, and a tampered evaluation; the opening the program is generated from agrees with it.  Then, for
 each mode (or the one given), the program bound to the transaction runs in hand: the honest witness at
 the estimated cost, and tampered witnesses, which must be rejected: an evaluation, a challenge word, a

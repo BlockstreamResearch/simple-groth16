@@ -1,7 +1,9 @@
 """snarkjs's JSON files (0.7.6, bn128) as numbers and points, for both verifiers' tools.
 
-Every point is checked: coordinates below p, not at infinity, on the curve (G1) or the twist and in the
-order-r subgroup (G2).  The checks raise CheckFailed (dsl.ensure), not AssertionError, so python -O keeps
+Every point is checked: affine (z = 1, as snarkjs writes them; snarkjs reads another z as Jacobian
+coordinates), coordinates below p, on the curve (G1) or the twist and in the order-r subgroup (G2).
+The fflonk proof's evaluations are read as snarkjs reads them: decimal strings below 2^256, reduced
+mod r, so that the witness holds the canonical words the program requires.  The checks raise CheckFailed (dsl.ensure), not AssertionError, so python -O keeps
 them; the tools turn them into refusals.  The keys are compiled into the programs, so they are trusted as
 the deployer's: these checks catch a corrupted or substituted file, not a malicious setup.
 """
@@ -27,24 +29,19 @@ def load(path: str) -> Any:
 
 
 def g1(pt: Sequence[Any]) -> G1Point:
-    """A snarkjs G1 point (projective, decimal strings), affine."""
+    """A snarkjs G1 point [x, y, "1"] (decimal strings)."""
     x, y, z = (int(v) for v in pt)
-    ensure(min(x, y, z) >= 0 and max(x, y, z) < B.P and z != 0, 'a G1 point: coordinates below p, not at infinity')
-    if z != 1:
-        zi = pow(z, -1, B.P)
-        x, y = x * zi % B.P, y * zi % B.P
+    ensure(z == 1, 'a G1 point: z is not 1 (snarkjs writes affine points; it would read this one as Jacobian)')
+    ensure(0 <= x < B.P and 0 <= y < B.P, 'a G1 point: coordinates below p')
     ensure(B.g1_on_curve(x, y), 'G1 point not on the curve')
     return (x, y)
 
 
 def g2(pt: Sequence[Any]) -> B.G2Point:
-    """A snarkjs G2 point, affine."""
+    """A snarkjs G2 point [x, y, ["1", "0"]], each coordinate in F_p2 as two decimal strings."""
     ensure(all(0 <= int(c) < B.P for v in pt for c in v), 'a G2 point: coordinates below p')
     x, y, z = (B.Fp2(int(v[0]), int(v[1])) for v in pt)
-    ensure(not z.is_zero(), 'a G2 point at infinity')
-    if z != B.Fp2(1):
-        zi = z.inv()
-        x, y = x * zi, y * zi
+    ensure(z == B.Fp2(1), 'a G2 point: z is not 1 (snarkjs writes affine points; it would read this one as Jacobian)')
     ensure(B.g2_on_curve(x, y), 'G2 point not on the twist')
     ensure(B.g2_in_subgroup((x, y)), 'G2 point not in the order-r subgroup')
     return (x, y)
@@ -88,9 +85,17 @@ def fflonk_key(j: dict[str, Any]) -> dict[str, Any]:
     return vk
 
 
+def scalar(v: Any) -> int:
+    """A field element as snarkjs reads one: a decimal string below 2^256, reduced mod r."""
+    ensure(isinstance(v, str) and v.isascii() and v.isdigit(), 'a scalar: not a decimal string')
+    x = int(v)
+    ensure(x < 1 << 256, 'a scalar: not below 2^256')
+    return x % B.R
+
+
 def fflonk_proof(j: dict[str, Any]) -> dict[str, Any]:
     """proof.json: the 4 points and the 15 evaluations, reduced mod r as snarkjs reads them."""
-    ensure(j.get('protocol') == 'fflonk', 'a snarkjs fflonk proof')
+    ensure(j.get('protocol') == 'fflonk' and j.get('curve') in ('bn128', 'bn254'), 'not a snarkjs fflonk/bn128 proof')
     out: dict[str, Any] = {k: g1(j['polynomials'][k]) for k in FFLONK_POINTS}
-    out.update({k: int(j['evaluations'][k]) for k in FFLONK_EVALS})
+    out.update({k: scalar(j['evaluations'][k]) for k in FFLONK_EVALS})
     return out

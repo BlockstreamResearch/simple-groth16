@@ -101,8 +101,12 @@ def main(argv=None):
             f'pruned program {r["program_bytes"]:,} B, witness {r["witness_bytes"]:,} B without padding: '
             f'{pad} blocks of padding ({pad * 512:,} B)'
         )
+    try:
+        value = g.witness_value(w, pad)  # before the file is opened, so a bad --pad leaves it as it was
+    except CheckFailed as e:
+        sys.exit(f'fflonk_snarkjs.py: {e}')
     with open(a.out + '.w0.json', 'w') as f:
-        json.dump(g.witness_value(w, pad), f)
+        json.dump(value, f)
     print(f'wrote {a.out}.w0.json: the proof verifies; cost {g.cost(estimate, pad):,} mWU ({time.time() - t0:.0f}s)')
 
 

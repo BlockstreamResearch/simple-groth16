@@ -6,7 +6,9 @@ PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive pyt
 whose leaves do not give the public signal is refused, as is one whose sighash is not the first public
 signal (--sighash-input).  tools/fflonk_snarkjs.py: --bind or --unbound is
 required, a key point off the curve is refused under python -O, and so is a proof for the other
-transcript.  tools/demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the
+transcript; the proof's evaluations load reduced mod r, as snarkjs reads them, so no witness holds a
+word that is not canonical, and a bad --pad leaves an earlier witness as it was.  The loaders refuse
+points whose z is not 1 (snarkjs would read them as Jacobian).  tools/demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the
 recorded one, whether it is cached or downloaded, and fflonk takes the smallest recorded size that is
 large enough.
 
@@ -170,6 +172,55 @@ def check_fflonk(tmp):
     assert not os.path.exists(out + '.simpl')
 
 
+def check_loaders(tmp):
+    """The fflonk proof's evaluations as snarkjs reads them; witness words in range; affine points only."""
+    sys.path.insert(0, ROOT)
+    from groth.core import bn254 as B
+    from groth.core import snarkjs as S
+    from groth.core.dsl import CheckFailed, wv
+
+    def fails(f, *args):
+        try:
+            f(*args)
+        except CheckFailed:
+            return
+        raise AssertionError(f'not refused: {args}')
+
+    with open(os.path.join(FFLONK, 'proof_keccak.json')) as f:
+        j = json.load(f)
+    a = int(j['evaluations']['a'])
+    good = S.fflonk_proof(j)
+    for k in (1, 4):  # snarkjs reads a + k r below 2^256 as a
+        j2 = json.loads(json.dumps(j))
+        j2['evaluations']['a'] = str(a + k * B.R)
+        assert S.fflonk_proof(j2) == good
+    for bad in (str(a - B.R), str(a + 6 * B.R), hex(a), ' 1', '1_2', 7, True):
+        j2 = json.loads(json.dumps(j))
+        j2['evaluations']['a'] = bad
+        fails(S.fflonk_proof, j2)
+    j2 = dict(j, curve='bls12381')
+    fails(S.fflonk_proof, j2)
+    for v in (-1, 1 << 256):
+        fails(wv, 256, v)
+    assert wv(256, (1 << 256) - 1) == {'w': 'f' * 64}
+    # z must be 1: (x z^2, y z^3, z) is the same point to snarkjs, another one (or none) to (X/Z, Y/Z)
+    x, y = S.g1(j['polynomials']['C1'][:2] + ['1'])
+    fails(S.g1, [str(x * 4 % B.P), str(y * 8 % B.P), '2'])
+    with open(os.path.join(EXAMPLE, 'verification_key.json')) as f:
+        vk = json.load(f)
+    vk['vk_beta_2'][2] = ['2', '0']
+    fails(S.groth16_key, vk)
+    # a bad --pad leaves an earlier witness file as it was
+    F = load('fflonk_snarkjs')
+    out = os.path.join(tmp, 'pad')
+    with open(out + '.w0.json', 'w') as f:
+        f.write('earlier')
+    files = [os.path.join(FFLONK, n) for n in ('verification_key.json', 'proof_keccak.json', 'public.json')]
+    refused(F.main, ['witness', *files, '--transcript', 'keccak', '--bind', '--pad', '512', '--out', out], expect='511')
+    with open(out + '.w0.json') as f:
+        assert f.read() == 'earlier'
+
+
 def check_ptau_fflonk(tmp):
     """fflonk needs 9 times its domain; a larger recorded size serves, and is taken."""
     D = load('demo')
@@ -197,6 +248,7 @@ def main():
         check_sighash_input(T, tmp)
         check_ptau(tmp)
         check_fflonk(tmp)
+        check_loaders(tmp)
         check_ptau_fflonk(tmp)
     print('all ok')
 

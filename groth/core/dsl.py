@@ -136,6 +136,7 @@ _CONST = re.compile(r'k\d+$')  # Sym.const's names
 
 # Witness values in the JSON format of tools/harness (see src/witness.rs).
 def wv(bits: int, v: int) -> WSpec:
+    ensure(0 <= v < 1 << bits, f'a {bits}-bit witness word out of range')
     return {'w': f'{v:0{bits // 4}x}'}
 
 

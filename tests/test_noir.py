@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Noir circuits through R1CS: tools/noir_r1cs.py's opcode check, and the Groth16 verifier bound by its
-first public input (groth/groth16/verifier.py, sighash_input) on the proofs in examples/noir.
+"""Noir circuits through R1CS: tools/noir_r1cs.py's checks, and the Groth16 verifier bound by its first
+public input (groth/groth16/verifier.py, sighash_input) on the proofs in examples/noir.
 
     python3 tests/test_noir.py [quick]
 
 The opcode check reads `nargo compile --print-acir` output (canned here, so no nargo is needed): it
 allows assertions, Brillig calls and the RANGE, AND and XOR black boxes, skips the Brillig functions'
 code, and refuses the rest (Keccak-f, which noir-cli writes as an unconstrained hint; memory; calls)
-unless trusted, and any line it does not know.
+unless trusted, and any line it does not know.  The layout check refuses a circuit whose public signals
+would not be its public parameters: noir-cli makes the first ACIR witnesses public, so a private
+parameter declared before a public one, or a return value, is refused.  nargo runs (stubbed here) into a
+fresh directory: the tool converts the artifact that run wrote, never one under the circuit's own
+target/, and refuses when nargo reports a problem on stderr, as it does for an unconstrained Brillig
+output while exiting 0.
 
 The proofs are of circuits/noir/multiplier (a = 3, b = 7, c = 21), made by `tools/demo.py
 --frontend noir` for the harness's dummy sighash and for another one.  The program must accept the
@@ -18,7 +23,9 @@ program.
 import json
 import os
 import sys
+import tempfile
 import time
+import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
@@ -102,6 +109,79 @@ def opcodes():
     print('opcode check: assertions, Brillig calls and RANGE pass; Keccak-f, memory and calls are refused')
 
 
+def layout():
+    N.check_layout(*N.public_layout(MULTIPLIER))  # the toy circuit: public parameters first
+    assert N.public_layout(MULTIPLIER) == ([0, 1], [])
+    assert N.r1cs_publics(os.path.join(EX, 'multiplier.r1cs')) == (0, 2)
+    bad = {
+        'a private parameter between two public ones': ('[w1, w3]', '[w0, w2]', '[]'),
+        'a public return value': ('[w1, w2]', '[w0]', '[w3]'),
+        'a private parameter first': ('[w0, w3]', '[w1, w2]', '[]'),
+    }
+    for label, (private, public, returns) in bad.items():
+        text = MULTIPLIER.replace('[w2, w3]', private, 1).replace('[w0, w1]', public, 1)
+        text = text.replace('return values: []', f'return values: {returns}')
+        expect = 'returns a value' if returns != '[]' else 'declare every'
+        assert N.public_layout(text)[0] == [int(w) for w in public.strip('[]').replace('w', '').split(', ')], label
+        refused(N.check_layout, *N.public_layout(text), expect=expect)
+    print('layout check: public parameters first pass; a private one before, or a return value, is refused')
+
+
+def stub_nargo(stderr='', programs=('multiplier',)):
+    """N.run as nargo 1.0.0-beta.19 would answer: the version, or a compile that writes `programs` into
+    the --target-dir it is given and prints the multiplier's ACIR, with `stderr`, exiting 0."""
+
+    def run(cmd, **kw):
+        if '--version' in cmd:
+            return types.SimpleNamespace(stdout=f'nargo version = {N.NARGO_VERSION}\n', stderr='')
+        target = cmd[cmd.index('--target-dir') + 1]
+        for name in programs:
+            with open(os.path.join(target, name + '.json'), 'w') as f:
+                f.write('{"nargo": "this run"}')
+        return types.SimpleNamespace(stdout=MULTIPLIER, stderr=stderr, returncode=0)
+
+    return run
+
+
+def nargo_run():
+    real = N.run
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            # a circuit directory with a decoy: a Nargo.toml whose description names another package,
+            # and a target/ holding an artifact under that name
+            circuit = os.path.join(tmp, 'c')
+            os.makedirs(os.path.join(circuit, 'target'))
+            with open(os.path.join(circuit, 'Nargo.toml'), 'w') as f:
+                f.write('[package]\ndescription = """\nname = "evil"\n"""\nname = "multiplier"\ntype = "bin"\n')
+            with open(os.path.join(circuit, 'target', 'evil.json'), 'w') as f:
+                f.write('{"nargo": "planted"}')
+            bug = "bug: Brillig function call isn't properly covered by a manual constraint\n"
+            cases = [
+                ({}, None),
+                ({'stderr': bug}, 'soundness bug'),
+                ({'programs': ()}, 'built 0'),
+                ({'programs': ('a', 'b')}, 'built 2'),
+            ]
+            for i, (case, expect) in enumerate(cases):
+                N.run = stub_nargo(**case)
+                t = os.path.join(tmp, f't{i}')
+                os.makedirs(t)
+                if expect is None:
+                    artifact, acir = N.nargo_compile(circuit, t)
+                    assert artifact == os.path.join(t, 'multiplier.json') and acir == MULTIPLIER, artifact
+                    with open(artifact) as f:
+                        assert 'this run' in f.read()
+                else:
+                    refused(N.nargo_compile, circuit, t, expect=expect)
+            N.run = stub_nargo(stderr='warning: unused variable\n')
+            t = os.path.join(tmp, 'tw')
+            os.makedirs(t)
+            N.nargo_compile(circuit, t, True)  # --allow-nargo-warnings: printed, not refused
+    finally:
+        N.run = real
+    print("nargo: the artifact is this run's, not the circuit's target/; a diagnostic on stderr is refused")
+
+
 def load(name):
     with open(os.path.join(EX, name)) as f:
         return json.load(f)
@@ -147,6 +227,8 @@ def program():
 
 def main():
     opcodes()
+    layout()
+    nargo_run()
     program()
     print('all ok')
 

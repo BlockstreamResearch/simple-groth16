@@ -2,7 +2,7 @@
 """F_p arithmetic (groth/core/fp.py): the program against the numeric model, on random words and on words the
 jets must reduce first (at least the secp256k1 field prime or group order, as a spender may give them).
 
-python3 tests/test_fp.py          # tests
+python3 tests/test_fp.py          # tests (SEED=1: the random words; ITERS=2: rounds before the edge words)
 python3 tests/test_fp.py bench    # cost of each operation
 """
 
@@ -114,7 +114,7 @@ def ops_chain(fp, ins, check):
 
     def step(i, x, a, b, c):
         if i == 12:
-            y = fp.add(fp.add(x, a), fp.add(b, c))  # four terms below 1.34 p: 5.1 p < 5.29 p
+            y = fp.add(fp.add(x, a), fp.add(b, c))  # x below 1.34 p and a, b, c below 1.29 p: 5.2 p < 5.29 p
             return be.checks([check('chain12', x), check('sum4', y), check('y*b', fp.mul(y, b))])
         nxt = fp.mul(x, b) if i % 2 == 0 else fp.sqr(x)
         return fp.let([nxt], lambda nv, lift: step(i + 1, nv[0], lift(a), lift(b), lift(c)))

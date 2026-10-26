@@ -3,12 +3,14 @@
 
     python3 tests/test_fflonk.py [quick] [keccak|sha256]
 
-The plain-Python port (groth/fflonk/reference.py) accepts each proof in its transcript's mode and rejects it in the
-other, and a tampered evaluation; the opening the program is generated from agrees with it.  Then, for
-each mode (or the one given), the program bound to the transaction runs in hand: the honest witness at
-the estimated cost, and tampered witnesses, which must be rejected: an evaluation, a challenge word, a
-public input, an inverse hint, a column word, the fixed-base scalar, an MSM hint, the pairing's G1 slot
-or its G2 slot, and a valid proof for another sighash.  `quick` skips the programs.
+The plain-Python port (groth/fflonk/reference.py) accepts each proof in its transcript's mode and
+rejects it in the other, and rejects a tampered evaluation or public input; the opening the program is
+generated from agrees with it, and no two witness nodes hold the same value.  Then, for each mode (or the
+one given), the program bound to the transaction runs in hand: the honest witness at the estimated cost,
+the witness padded for a larger program, whose budget must cover its cost, and tampered witnesses, which
+must be rejected: an evaluation, a challenge word, a public input, an inverse hint, a column word, the
+fixed-base scalar, an MSM hint, the pairing's G1 slot or its G2 slot, and, in Keccak mode, a valid proof
+for another sighash.  `quick` skips the programs.
 
 The proofs bind the harness's dummy sighash (DUMMY_SIGHASH): circuits/multiplier_fflonk.circom with
 a = 3, b = 7, made by tools/demo.py (the SHA-256 one by tools/snarkjs_sha256.mjs).

@@ -1,5 +1,6 @@
 """Run generated programs through tools/harness `hand`, which parses, prunes, executes, serialises,
-decodes and executes again, and reports the cost bound and the sizes."""
+decodes and executes again, and reports the cost bound and the sizes.  HAND overrides the path of hand
+(default tools/harness/target/release/hand), HAND_WORK the directory for the files (default build/)."""
 
 import json
 import os

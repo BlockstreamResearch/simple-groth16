@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""The generator refuses to emit a program whose soundness argument would not hold: a witness node read
-twice, loop bounds that the step functions do not keep, a projection that is not a whole subtree, a binding
-for a key with more than one public input.  (No addition meeting T = Q: tests/test_g2_check.py.)  And every
+"""The generator refuses to emit a program whose soundness argument would not hold: loop bounds that the
+step functions do not keep, a projection that is not a whole subtree, a binding by the tree for a key with
+more than one public input.  For a witness node read twice, the use count follows the tree unfolding,
+which compile() checks.  (No addition meeting T = Q: tests/test_g2_check.py.)  And every
 check of the generated verifier is on the path of every spend: none under a branch that pruning could drop.
 
     python3 tests/test_invariants.py

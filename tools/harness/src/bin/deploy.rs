@@ -8,10 +8,12 @@
 //   deploy address <program> <network> [--internal-key <x-only hex> | --secret-file <file>]
 //       the CMR, the output key and the address of a taproot output with one Simplicity leaf (version 0xbe,
 //       script = the CMR) and the internal key (default: BIP341's unspendable point, i.e. no key path; with
-//       --secret-file the key of the secret in that file, every command accepts either)
-//   deploy sighash <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>]
-//       the sig_all_hash of input 0 of the spending transaction below: leaf 0 of the circuit's public-signal tree
-//   deploy spend <program> <witness.json> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>] [--save <out>] [--force]
+//       --secret-file the key of the secret in that file).  address, sighash, spend and keyspend take
+//       either flag, and need the same one to find the output
+//   deploy sighash <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex> | --secret-file <file>]
+//       the sig_all_hash of input 0 of the spending transaction below: the value the proof binds (leaf 0 of
+//       the Merkle tree, the first public input with --sighash-input, or fflonk's two limbs)
+//   deploy spend <program> <witness.json> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex> | --secret-file <file>] [--save <out>] [--force]
 //       the transaction spending the output with the proof: one input whose witness stack is the Simplicity
 //       witness, the program, the CMR and the control block, one explicit output of sats - fee to dest and the
 //       fee output; the program is pruned against this transaction and executed, then the hex is printed
@@ -28,7 +30,8 @@
 //   deploy send <network> <funding.hex> <vout> <dest> <sats> <fee> --secret-file <file> [--blinding-file <file>] [--change <address>]
 //       spends output <vout> of the funding transaction (the raw hex in a file; unblinded with the blinding
 //       key if confidential) to dest as an explicit output of sats, e.g. to fund a verifier address; the rest
-//       minus the fee goes to the change address, blinded when the input was (the blinders must balance)
+//       minus the fee goes to the change address, blinded when the input was (the blinders must balance).
+//       --change is needed unless sats + fee spend the whole input
 //   deploy sighash dummy
 //       the sig_all_hash of the harness's dummy environment (tests)
 //
@@ -69,8 +72,8 @@ const STANDARD_WEIGHT: usize = 400_000;
 
 const USAGE: &str = "usage: deploy compile <program.simpl> <out>
        deploy address <program> <network> [--internal-key <hex> | --secret-file <file>]
-       deploy sighash <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>]
-       deploy spend <program> <witness.json> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex>] [--save <out>] [--force]
+       deploy sighash <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex> | --secret-file <file>]
+       deploy spend <program> <witness.json> <network> <txid> <vout> <sats> <asset> <dest> <fee> [--genesis <hash>] [--internal-key <hex> | --secret-file <file>] [--save <out>] [--force]
        deploy keyspend <program> <network> <txid> <vout> <sats> <asset> <dest> <fee> --secret-file <file> [--genesis <hash>]
        deploy wallet <network> --secret-file <file> [--blinding-file <file>]
        deploy send <network> <funding.hex> <vout> <dest> <sats> <fee> --secret-file <file> [--blinding-file <file>] [--change <address>]

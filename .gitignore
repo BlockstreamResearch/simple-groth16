@@ -6,8 +6,11 @@ circuits/node_modules/
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
-# demo trusted-setup and prover files outside build/
+# trusted-setup, prover and key files the tools write, also outside build/
 *.ptau
+*.ptau.part
 *.zkey
 *.wtns
+*.secret
+# nargo's build directory, when nargo is run by hand (tools/noir_r1cs.py builds in a temporary one)
 circuits/noir/*/target/

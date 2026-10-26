@@ -15,13 +15,13 @@ spending transaction.  The witness needs --leaves, a JSON file {"sighash": "<64 
 
 --sighash-input (in place of --values and --leaves): the circuit's first public signal is the sighash of
 the spending transaction with its top three bits cleared (binding.public_signal, as for a root), which the
-program compares with the transaction's, and every public signal is a verifier input (about 6.6 M mWU and
-14 kB each).  For circuits that cannot compute the Merkle root, such as Noir circuits converted to R1CS
+program compares with the transaction's, and every public signal is a verifier input (about 6 M mWU and
+12 to 14 kB each).  For circuits that cannot compute the Merkle root, such as Noir circuits converted to R1CS
 (tools/noir_r1cs.py, circuits/noir/multiplier).  `witness` needs the sighash itself (--sighash), since
 the signal lacks its top three bits.
 
---unbound (in place of the others): every public signal is a verifier input (about 6.6 M mWU
-and 14 kB each).  Nothing binds the transaction: anyone who sees a spend can reuse its witness in another
+--unbound (in place of the others): every public signal is a verifier input (about 6 M mWU and
+12 to 14 kB each).  Nothing binds the transaction: anyone who sees a spend can reuse its witness in another
 transaction to the same output, and the public inputs are whatever the spender proves.
 """
 
@@ -100,7 +100,7 @@ def binding_depth(n, n_values, leaf_values, unbound):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('command', choices=['program', 'witness'])
     ap.add_argument('files', nargs='+', help='verification_key.json [proof.json public.json]')
     ap.add_argument('--out', required=True)
@@ -148,12 +148,12 @@ def main(argv=None):
     need(B.groth16_verify(vk, proof, inputs), 'the proof does not verify')
     g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth, sighash_input=by_input)
     if by_input:
-        need(Groth16.root(sighash, []) == inputs[0], 'the first public signal is not this sighash')
+        need(binding.bound_signal(sighash, []) == inputs[0], 'the first public signal is not this sighash')
         wit = g.witness(proof, inputs, sighash)
     elif depth:
         need(bool(a.leaves), '--leaves is needed for a bound circuit')
         sibs = binding.siblings([sighash] + values)
-        need(Groth16.root(sighash, sibs) == inputs[0], 'the leaves do not give the public signal')
+        need(binding.bound_signal(sighash, sibs) == inputs[0], 'the leaves do not give the public signal')
         wit = g.witness(proof, inputs, sighash, sibs)
     else:
         wit = g.witness(proof, inputs)

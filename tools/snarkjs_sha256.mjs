@@ -7,8 +7,9 @@
 //   node tools/snarkjs_sha256.mjs prove <circuit.zkey> <witness.wtns> <proof.json> <public.json>
 //   node tools/snarkjs_sha256.mjs verify <verification_key.json> <public.json> <proof.json>
 //
-// It copies snarkjs's src/ to src-sha256/ beside it, with Keccak256Transcript.js hashing with SHA-256 (the
-// class keeps its name, so nothing else changes), and runs fflonk_prove / fflonk_verify from the copy.  The
+// On each run it copies snarkjs's src/ afresh to src-sha256/ inside the snarkjs package ($NODE_MODULES/snarkjs),
+// with Keccak256Transcript.js hashing with SHA-256 (the class keeps its name, so nothing else changes), and
+// runs fflonk_prove / fflonk_verify from the copy.  The
 // setup and the verification key are snarkjs's own: the transcript does not enter them.
 // NODE_MODULES: the node_modules that holds snarkjs 0.7.6 (default: circuits/node_modules).
 import fs from 'fs';

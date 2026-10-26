@@ -1,7 +1,8 @@
-"""BN254 base-field arithmetic from the secp256k1 jets.
+"""BN254 field arithmetic from the secp256k1 jets: the base field p, and the scalar field r for fflonk
+(Field, FP, FR).
 
-An element x of F_p (p the 254-bit BN254 prime) is a word X = x R mod p in Montgomery form, with radix
-R = p_s, the secp256k1 field prime.  X is not reduced: the generator carries a static bound `hi` with
+An element x of F_q (q = p or r, both 254-bit primes) is a word X = x R mod q in Montgomery form, with
+radix R = p_s, the secp256k1 field prime.  X is not reduced: the generator carries a static bound `hi` with
 0 <= X <= hi.  A product is computed exactly, in CRT form, by the two secp256k1 jet families, then reduced:
 
     S = A B                                   fe_multiply(A, B), scalar_multiply(A, B): S mod p_s, S mod n_s
@@ -161,7 +162,7 @@ class Fp:
 
     def lin_const(self, terms: Sequence[tuple[Val, int]]) -> Val:
         """Sum of k_i x_i for field constants k_i (any sign, taken mod p).  The constants are folded into
-        the reduction, as in mul_const: two jets per term plus two."""
+        the reduction, as in mul_const: four jets per term (mul_const is one term)."""
         be = self.be
         hi = sum(x.hi * self.F.to_mont(k % self.P) for x, k in terms)
         ensure(hi < self.F.CRT_MAX, 'CRT accumulator bound exceeded')

@@ -4,13 +4,17 @@
 tools/groth16_snarkjs.py: a circuit is bound to the transaction unless --unbound is given (--values 0 is
 PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive python -O, and a witness
 whose leaves do not give the public signal is refused, as is one whose sighash is not the first public
-signal (--sighash-input).  tools/fflonk_snarkjs.py: --bind or --unbound is
-required, a key point off the curve is refused under python -O, and so is a proof for the other
-transcript; the proof's evaluations load reduced mod r, as snarkjs reads them, so no witness holds a
-word that is not canonical, and a bad --pad leaves an earlier witness as it was.  The loaders refuse
-points whose z is not 1 (snarkjs would read them as Jacobian).  tools/demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the
-recorded one, whether it is cached or downloaded, and fflonk takes the smallest recorded size that is
-large enough.
+signal (--sighash-input).
+
+tools/fflonk_snarkjs.py: --bind or --unbound is required; a key point off the curve is refused, also
+under python -O, and so is a proof made with the other transcript.  The proof's evaluations load reduced
+mod r, as snarkjs reads them, so no witness holds a word that is not canonical, and a bad --pad leaves an
+earlier witness as it was.  The loaders refuse points whose z is not 1 (snarkjs would read them as
+Jacobian).
+
+tools/demo.py: a powers-of-tau file is used only if its BLAKE2b-512 digest is the recorded one, whether
+it is cached or downloaded; a recorded size larger than needed serves (fflonk's 2^9 takes the recorded
+2^16), and a size with no recorded digest is refused.
 
     python3 tests/test_tools.py
 """
@@ -110,7 +114,8 @@ def check_sighash_input(T, tmp):
 
 def check_ptau(tmp):
     D = load('demo')
-    D.snarkjs = lambda *a, **kw: types.SimpleNamespace(stdout='# of Constraints: 5\n')  # 2^3 >= 5 + 2
+    info = '# of Constraints: 5\n# of Public Inputs: 0\n# of Outputs: 1\n'  # 2^3 > 5 + 1
+    D.snarkjs = lambda *a, **kw: types.SimpleNamespace(stdout=info)
     good, bad = b'the recorded powers of tau', b'another powers of tau'
     D.PTAU_BLAKE2B = {3: hashlib.blake2b(good, digest_size=64).hexdigest()}
     os.environ.pop('PTAU', None)

@@ -1,4 +1,4 @@
-//! Witness files: JSON specs of Simplicity values, written by the Python generators (groth/dsl.py).
+//! Witness files: JSON specs of Simplicity values, written by the Python generators (groth/core/dsl.py).
 //!
 //! A file maps witness node names to values, `{"w_in": VALUE, "wl0": VALUE, ...}`, where VALUE is
 //!   {"w": "<hex>"}              a word of 4 * len(hex) bits (a power of two)

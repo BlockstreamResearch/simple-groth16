@@ -4,7 +4,7 @@ must be rejected, with the challenges as they were and sealed again (anyone can 
 and so must an input above r that the tables alone cannot tell from the right one.  The budget of the
 input must cover the cost.
 
-    python3 tests/test_groth16.py             # one public input
+    python3 tests/test_groth16.py             # one public input (SEED=7: the synthetic key)
     INPUTS=2 python3 tests/test_groth16.py    # two
 """
 
@@ -130,7 +130,7 @@ def main():
     ]
     for name, cst in rows:
         print(f'{name:48} {cst:>12,}')
-    # the budget of the input (program + witness bytes + 50, times 1000) must cover the cost
+    # the budget of the input (program + witness + 33 + 9 + 50 bytes, times 1000: budget_ok) must cover the cost
     assert budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), 'budget'
     weight = r['program_bytes'] + r['witness_bytes'] + 33 + 9
     print(

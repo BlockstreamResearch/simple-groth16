@@ -20,8 +20,8 @@ help:
 	@echo 'make bench      the cost of each F_p operation'
 	@echo 'make example    check that the files in examples/ regenerate byte for byte'
 	@echo 'make example-uprog  and that deploy compile gives the committed .uprog and .wnames (minutes)'
-	@echo 'make fflonk-demo  the fflonk toy circuit in both transcript modes, setup and prove (circom, node)'
-	@echo 'make noir-demo  the Noir toy circuit for Groth16, setup and prove (nargo, noir-cli, node)'
+	@echo 'make fflonk-demo  the fflonk toy circuit in both transcript modes, setup and prove (circom, Node.js)'
+	@echo 'make noir-demo  the Noir toy circuit for Groth16, setup and prove (nargo, noir-cli, Node.js)'
 	@echo 'make lint       ruff, mypy, cargo fmt and clippy, as CI runs them'
 	@echo 'make fmt        format the Python and the Rust code'
 
@@ -61,8 +61,8 @@ example-uprog: example harness
 	cmp build/check.wnames $(E)/verifier.wnames
 	@echo 'deploy compile gives the committed verifier.uprog and verifier.wnames'
 
-# the fflonk toy circuit, setup and prove in each transcript mode, for the harness's dummy sighash (no node:
-# tools/regtest.sh spends it)
+# the fflonk toy circuit, setup and prove in each transcript mode, for the harness's dummy sighash (no
+# Elements node; after deploy compile, tools/regtest.sh build/fflonk_<t> proves and spends on one)
 fflonk-demo: harness
 	for t in keccak sha256; do \
 		$(PYTHON) tools/demo.py setup --protocol fflonk --transcript $$t --out build/fflonk_$$t && \
@@ -70,8 +70,8 @@ fflonk-demo: harness
 			--sighash 9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a || exit 1; \
 	done
 
-# the Noir toy circuit for Groth16, setup and prove for the harness's dummy sighash (no node: tools/regtest.sh
-# spends it)
+# the Noir toy circuit for Groth16, setup and prove for the harness's dummy sighash (no Elements node;
+# after deploy compile, tools/regtest.sh build/noir proves and spends on one)
 noir-demo: harness
 	$(PYTHON) tools/demo.py setup --frontend noir --out build/noir
 	$(PYTHON) tools/demo.py prove --out build/noir \

@@ -49,7 +49,7 @@ def refusing(f, path):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('command', choices=['program', 'witness'])
     ap.add_argument('files', nargs='+', help='verification_key.json [proof.json public.json]')
     ap.add_argument('--out', required=True)

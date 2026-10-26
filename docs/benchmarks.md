@@ -4,7 +4,7 @@ All costs are Simplicity's static cost bound in milliweight units (mWU), as rust
 
 ## One spend
 
-The toy circuit's verifier (one public signal bound to the transaction), spent on an Elements 23.3.1 regtest node in `407cf881…`:
+The toy circuit's verifier (one public signal bound to the transaction), in one spend on an Elements 23.3.1 regtest node, whose files are in `examples/multiplier/`:
 
 | | |
 |---|---|
@@ -13,7 +13,7 @@ The toy circuit's verifier (one public signal bound to the transaction), spent o
 | pruned program | 34,147 bytes |
 | witness (proof, 37 compressed Miller values, slopes, quotient, Merkle sibling) | 18,432 bytes |
 | transaction | 53,308 WU, 13,327 vB |
-| fee at 0.115 sat/vB, which Liquid testnet accepts | about 1,500 sat |
+| fee at 0.115 sat/vB | about 1,500 sat |
 
 ## Where the cost goes
 
@@ -27,7 +27,7 @@ The toy circuit's verifier (one public signal bound to the transaction), spent o
 | transaction binding, range check | 25,496 | 0.0% |
 | total | 48,646,805 | |
 
-Of the loop, 34.1 M is in the steps and 4.1 M in passing the state from one step to the next: the state carries 22 values computed in the setup (powers of z, the points at z, a_c(z) ± z, r and r^2) and the public input to every step, and a step function gets the 9 or 16 of them it reads. Each step reads its leaf from a witness node of its own, so the leaves are not carried.
+Of the loop, 34.1 M is in the steps and 4.0 M in passing the state from one step to the next: the state carries 22 values computed in the setup (powers of z, the points at z, a_c(z) ± z, r and r^2) and the public input to every step, and a step function gets the 9 or 16 of them it reads. Each step reads its leaf from a witness node of its own, so the leaves are not carried.
 
 ## Where the bytes go
 
@@ -42,7 +42,7 @@ Of the loop, 34.1 M is in the steps and 4.1 M in passing the state from one step
 | B's slopes, 88 steps | 5,632 |
 | a_c, the proof, the challenges, the input, the sibling | 576 |
 
-`tools/harness/target/release/sizes <program.simpl> <witness.json>` splits a pruned program into constants, pruned-branch commitments and code, and attributes it to named definitions.
+`tools/harness/target/release/sizes <program.simpl> <witness.json> [name,...]` splits a pruned program into constants, pruned-branch commitments and code and, given definition names, attributes its bytes to them.
 
 ## Building blocks
 
@@ -61,33 +61,26 @@ Of the loop, 34.1 M is in the steps and 4.1 M in passing the state from one step
 | a factor of the public input's term: σ ± b2 at z (31 calls) | 130,429 |
 | a factor with its selection and its share of the products | about 183,000 |
 
-A doubling step evaluates B's slope and the two lines at z and -z, updates N and D, and adds its relations to the Horner sum; a committed one also evaluates the committed value (a 6-term dot product). Computed in the tower, the same step cost 3,644,556.
-
-## Before and after
-
-| | tower Miller loop (main) | one polynomial identity |
-|---|---:|---:|
-| program cost | 371.8 M mWU (with 414 padding blocks) | 48.6 M mWU |
-| pruned program | 161 kB | 34 kB |
-| witness | 220 kB (212 kB of it padding) | 18 kB |
-| transaction | 382.2 kWU, 95.6 kvB | 53.3 kWU, 13.3 kvB |
+A doubling step evaluates B's slope and the two lines at z and -z, updates N and D, and adds its relations to the Horner sum; a committed one also evaluates the committed value (a 6-term dot product). Computed in the tower, the same step would cost 3,644,556.
 
 ## Time
 
 | | |
 |---|---|
-| generate the program from a key, with its tables (Python) | 4 s |
-| generate the witness: Miller values, residue witness, quotient (Python) | 2 s |
-| `deploy compile`: parse the 2.8 MB program text, once per key | 2.7 min |
-| `deploy spend`: prune, execute, build the transaction | 1 s |
-| snarkjs setup / proof of the toy circuit | 1.3 min / 1 s |
-| `tests/test_groth16.py` | 2.2 min |
+| `groth16_snarkjs.py program`: the program from a key, with its tables (Python) | 5 s |
+| `groth16_snarkjs.py witness`: check the proof, then the Miller values, residue witness and quotient (Python) | 8 s |
+| `deploy compile`: parse the 2.8 MB program text, once per key | 3.1 min |
+| `deploy compile` of the Noir verifier (5.4 MB, two inputs) and of the fflonk SHA-256 verifier | 10 min, 5.8 min |
+| `deploy spend`: load the program, prune and execute it, build the transaction | 6 s |
+| `tools/demo.py setup`: circom, the snarkjs setup and contribution, the program | 2.1 min |
+| `fflonk_snarkjs.py witness`: one run in `hand` to size the padding | 5.6 min |
+| `tests/test_groth16.py` | about 3 min |
 
 Measured on a 2-core cloud VM.
 
 ## Reproducing
 
-Each number comes from a test, which prints it (`make bench` for the first, `make -j4 test` for the rest):
+The tests print the costs and sizes (`make bench` for the F_p operations, `make -j4 test` for the rest). The weights come from `deploy spend` and `tools/regtest.sh`, and the times from running the commands.
 
 ```sh
 python3 tests/test_fp.py bench   # F_p operations
@@ -96,11 +89,17 @@ python3 tests/test_curve.py      # on-curve checks, tables, the range check of a
 python3 tests/test_pairing.py    # the check alone: its parts, its steps, tampered witnesses
 python3 tests/test_g2_check.py   # the G2 membership check
 python3 tests/test_groth16.py    # the whole verifier (INPUTS=2 for two public inputs)
-python3 tests/test_inputs.py     # keys with 3 to 5 public inputs (generated, not run)
+python3 tests/test_inputs.py     # keys with 3 to 5 public inputs (numeric model; only some window factors run)
 python3 tests/test_binding.py    # the verifier with the transaction binding
+python3 tests/test_noir.py       # the Noir circuit's verifier, and noir_r1cs.py's checks
+python3 tests/test_keccak.py     # Keccak-f[1600] for the fflonk transcript
+python3 tests/test_msm.py        # the fflonk MSM: group law, GLV, fixed base
+python3 tests/test_fflonk.py     # the fflonk verifier, both transcripts, with its cost by part
+python3 tests/test_invariants.py # what the generator refuses
+python3 tests/test_tools.py      # what the command-line tools refuse
 ```
 
-`deploy spend` prints the cost, the sizes and the budget of a real transaction, and `tools/harness/target/release/costs <program.simpl>` the cost of every named definition of a program. The files in `examples/multiplier/` regenerate the program and the witness of the regtest spend `407cf881…` byte for byte (`make example`):
+The fflonk and Noir costs are in [fflonk.md](fflonk.md) and [noir.md](noir.md). `deploy spend` prints the cost, the sizes and the budget of a real transaction, and `tools/harness/target/release/costs <program.simpl>` the cost of every named definition of a program. The files in `examples/multiplier/` regenerate the program and the witness of that spend byte for byte (`make example`):
 
 ```sh
 E=examples/multiplier
@@ -109,12 +108,14 @@ python3 tools/groth16_snarkjs.py witness $E/verification_key.json $E/proof.json 
 gunzip -c $E/verifier.simpl.gz | cmp - build/check.simpl && gunzip -c $E/verifier.w0.json.gz | cmp - build/check.w0.json
 ```
 
-## On-chain runs
+## Runs on a node
 
-| network | transaction | what |
+`tools/regtest.sh` on Elements 23.3.1 regtest, with each toy circuit. Each run spends one output with the proof, shows that the same proof is rejected in a transaction paying someone else (`Assertion failed inside jet`), and spends a second output of the same leaf through a key path.
+
+| verifier | proof spend | key path |
 |---|---|---|
-| Elements 23.3.1 regtest | `4a27486d…` | the walkthrough (`tools/regtest.sh`): proof spend, 53,318 WU, vsize 13,330 |
-| Elements 23.3.1 regtest | `407cf881…` | proof spend, the files in `examples/multiplier/` |
-| Elements 23.3.1 regtest | a redirected proof | rejected with `Assertion failed inside jet` |
-| Elements 23.3.1 regtest | `7adfa4f9…` | the key path of the same leaf, 721 WU |
-| Liquid testnet | [`f25a6e90…`](https://blockstream.info/liquidtestnet/tx/f25a6e90417c427f25c1d6883869825f30ec111a357b0e550bf24a20725d3cdb), block 2,659,534 | an earlier verifier (tower Miller loop, without the G2 check): 381,492 WU, fee 11,000 sat |
+| Groth16, circom | 53,315 WU, 13,329 vB | 721 WU |
+| Groth16, Noir | 67,803 WU, 16,951 vB | 721 WU |
+| fflonk, SHA-256 transcript | 126,589 WU, 31,648 vB | 721 WU |
+
+The weights vary by a few WU between runs, with the signature and the transaction's other fields.

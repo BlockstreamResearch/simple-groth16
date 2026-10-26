@@ -23,7 +23,8 @@ from typing import Any
 
 from .dsl import CheckFailed, Emitter, balanced, balanced_paths, ensure, pairwise_sum
 
-# jet costs (mWU), as in rust-simplicity 0.9 and Elements 23.3; add a jet here before using it
+# jet costs (mWU), as in rust-simplicity 0.9 and Elements 23.3; a jet must be here before it is used
+# (keccak.py and msm.py add theirs)
 JET_COST = {
     'fe_multiply': 808,
     'fe_square': 556,
@@ -97,7 +98,8 @@ class Sym:
         self.env = [env_width]
         self.env_ids = [0]  # a named node has one type, so texts are only shared within one environment
         self.next_env_id = 1
-        self.fns: dict[str, E] = {}  # functions defined once per program, by name (curve.digit_fn, curve.bits_fn)
+        # functions defined once per program, by name (curve's DIGIT, msm's G1ADD, keccak's ROUND, ...)
+        self.fns: dict[str, E] = {}
 
     # sharing and environments
     def share(self, e: E, prefix: str = 'n') -> E:

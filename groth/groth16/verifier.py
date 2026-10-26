@@ -5,12 +5,13 @@ The program checks e(-A, B) e(C, delta) e(alpha, beta) e(L, gamma) = 1 as one po
 value of (alpha, beta) the constant of the final relation, and the IC points with gamma the tables of the
 public inputs' term: e(L, gamma) = e(IC_0, gamma) prod e(IC_i, gamma)^(a_i), so L is never computed.
 
-The witness, the field words in Montgomery form (x R mod p, R = 2^256 - 2^32 - 977): the program's
-witness node w_in holds
+The witness: field words (points, slopes, Q) are in Montgomery form (x R mod p, R = p_s = 2^256 - 2^32 -
+977); public inputs and siblings are plain big-endian words.  The witness node w_in holds
 
-    (public inputs, the check's witness (pairing.witness_shape))
+    main = (public inputs, the check's witness (pairing.witness_shape))
 
-and the pairing check reads each step's leaf and Q from witness nodes of their own (pairing.witness_nodes).
+paired, with a binding by the tree, with the siblings of leaf 0.  The pairing check reads each step's
+leaf and Q from witness nodes of their own (pairing.witness_nodes).
 
 -A is given instead of A, so the program negates nothing.  `witness` computes everything from a proof.
 The public inputs are range-checked (a_i < r).
@@ -23,9 +24,7 @@ valid for this transaction only.
 Binding by the input (sighash_input): the circuit's first public input is the sighash itself, with its top
 three bits cleared like a root (binding.public_signal), and the program compares it with the jet's: a tree
 with no siblings.  The circuit needs no hash, for circuits that cannot compute SHA-256 soundly or cheaply
-(Noir's, converted to R1CS), and may have more public inputs, about 6.6 M mWU and 14 kB each.
-
-The witness node w_in is the balanced pair of main and, with a binding by the tree, the siblings.
+(Noir's, converted to R1CS), and may have more public inputs, about 6 M mWU and 14 kB each.
 """
 
 from __future__ import annotations
@@ -84,7 +83,8 @@ class Groth16:
     ) -> dict[str, Any] | None:
         """The witness of the proof (A, B, C) for the public inputs, as a dict; None if the proof does not
         verify.  With a binding by the tree, also the sighash (leaf 0) and its siblings (binding.siblings),
-        which must give the first input; by the input, the sighash, which must be the first input."""
+        which must give the first input; by the input, the sighash, whose masked value (binding.public_signal)
+        must be the first input."""
         A, B, C = proof
         ensure(len(inputs) == self.n and all(0 <= a < R for a in inputs), 'public inputs')
         wit = self.pc.prover.witness([(bn254.g1_neg(A), B), (C, self.vk['delta'])], inputs)
@@ -96,23 +96,18 @@ class Groth16:
                 raise CheckFailed('the sighash and its siblings')
             wit['sighash'] = int.from_bytes(leaf(sighash), 'big')
             wit['siblings'] = [int.from_bytes(leaf(x), 'big') for x in siblings]
-            if self.root(wit['sighash'], wit['siblings']) != inputs[0]:
+            if bound_signal(wit['sighash'], wit['siblings']) != inputs[0]:
                 return None
         elif self.sighash_input:
             if sighash is None:
                 raise CheckFailed('the sighash')
             wit['sighash'] = int.from_bytes(leaf(sighash), 'big')
-            if self.root(wit['sighash'], []) != inputs[0]:
+            if bound_signal(wit['sighash'], []) != inputs[0]:
                 return None
         return wit
 
-    @staticmethod
-    def root(sighash: bytes | int, siblings: Sequence[bytes | int]) -> int:
-        """The public input that the siblings of leaf 0 bind to the sighash."""
-        return bound_signal(sighash, siblings)
-
     def _with_siblings(self, main: Any, siblings: Any) -> list[Any]:
-        """The parts of w_in: main, and the siblings if there is a binding."""
+        """The parts of w_in: main, and the siblings with a binding by the tree (depth > 0)."""
         return [main, siblings] if self.depth else [main]
 
     def witness_type(self) -> str:
@@ -182,7 +177,7 @@ class Groth16:
         be = self.be
         if not is_sym(be):
             sighash, sibs = siblings
-            ensure(self.root(sighash, sibs) == a1, 'transaction binding failed')
+            ensure(bound_signal(sighash, sibs) == a1, 'transaction binding failed')
             return 0
         out = root_check(be, a1, siblings)
         self.parts['binding'] = out.c

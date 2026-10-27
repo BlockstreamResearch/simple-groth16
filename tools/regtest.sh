@@ -6,9 +6,10 @@
 #
 #   tools/regtest.sh build/multiplier
 #
-# Before: `python3 tools/demo.py setup --out build/multiplier` and
-# `deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.  The fflonk verifier runs
-# the same way, from `setup --protocol fflonk [--transcript sha256]` (its transaction is about 32 kvB).
+# Before: `make harness`, `python3 tools/demo.py setup --out build/multiplier` and
+# `tools/harness/target/release/deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.
+# The other verifiers run the same way, from `setup --frontend noir` (a 17 kvB transaction) or
+# `setup --protocol fflonk [--transcript sha256]` (46 kvB with Keccak, 32 kvB with SHA-256).
 #
 # The node needs Simplicity enabled and a funded wallet.  elements.conf:
 #     chain=elementsregtest
@@ -18,7 +19,6 @@
 #     evbparams=simplicity:-1:::
 #     acceptnonstdtxn=0
 #     initialfreecoins=2100000000000000
-#     anyonecanspend_aremine=1
 # then `elements-cli createwallet w` and `elements-cli rescanblockchain` to claim the free coins.
 #
 # Environment: ELEMENTS_CLI (default `elements-cli`, e.g. "elements-cli -datadir=..."), DEPLOY (the
@@ -48,12 +48,14 @@ genesis=$($CLI getblockhash 0)
 asset=$($CLI dumpassetlabels | json bitcoin)
 dest=$(unconfidential "$($CLI getnewaddress "" bech32)")
 
+# block: mine a block to $dest and print its hash (getrawtransaction takes it, so no -txindex is needed)
+block() { $CLI generatetoaddress 1 "$dest" | python3 -c 'import json,sys; print(json.load(sys.stdin)[-1])'; }
+
 # fund <address> <script_pubkey>: send 1.0, mine it, set $fund (txid) and $vout
 fund() {
   fund=$($CLI sendtoaddress "$1" 1.0)
-  $CLI generatetoaddress 1 "$dest" > /dev/null
-  vout=$($CLI getrawtransaction "$fund" true | python3 -c "
-import json,sys; j=json.load(sys.stdin); print([o['n'] for o in j['vout'] if o['scriptPubKey'].get('hex') == '$2'][0])")
+  vout=$($CLI getrawtransaction "$fund" true "$(block)" | python3 -c '
+import json,sys; j=json.load(sys.stdin); print([o["n"] for o in j["vout"] if o["scriptPubKey"].get("hex") == sys.argv[1]][0])' "$2")
   echo "funded $fund:$vout with 1.0"
 }
 
@@ -74,9 +76,8 @@ sys.exit(0 if not r['allowed'] and 'script-verify' in reason and 'jet' in reason
 mine() {
   local txid
   txid=$($CLI -stdin sendrawtransaction < "$1")
-  $CLI generatetoaddress 1 "$dest" > /dev/null
-  $CLI getrawtransaction "$txid" true | python3 -c "
-import json,sys; j=json.load(sys.stdin); print('$2 in tx {}: confirmations {}, weight {:,} WU, vsize {:,}'.format(j['txid'], j['confirmations'], j['weight'], j['vsize']))"
+  $CLI getrawtransaction "$txid" true "$(block)" | python3 -c '
+import json,sys; j=json.load(sys.stdin); print("{} in tx {}: confirmations {}, weight {:,} WU, vsize {:,}".format(sys.argv[1], j["txid"], j["confirmations"], j["weight"], j["vsize"]))' "$2"
 }
 
 # 1. an output whose only spending condition is a proof for the spending transaction

@@ -10,9 +10,10 @@ The program checks what snarkjs's fflonkVerify checks (reference.py is its plain
               what the next transcript absorbs, as snarkjs absorbs the reduced challenges.
   opening     the evaluations of r0, r1, r2 at y, the quotients q1, q2 and e = r0 + q1 r1 + q2 r2, in
               F_r (frprog.py: straight-line code; an inverse is a hint checked by a product)
-  MSM         A1 - C0 = q1 C1 + q2 C2 - t W1 + y W2 - e G1 (msm.py: GLV columns with runtime tables for
-              the four proof points, windows of constant tables for G1).  The prover gives the column
-              words and the canonical v = -e; the program checks them against the scalars in F_r.
+  MSM         A1 - C0 = q1 C1 + q2 C2 - t W1 + y W2 - e G1, t = y^8 - xi (snarkjs's `temp`) (msm.py:
+              GLV columns with runtime tables for the four proof points, windows of constant tables
+              for G1).  The prover gives the column words and the canonical v = -e; the program
+              checks them against the scalars in F_r.
   pairing     e(-A1, [1]_2) e(W2, [x]_2) = 1 by pairing.py's polynomial identity, with
               e(-C0, [1]_2) moved into its constant: the pairs are (-(A1 - C0), [1]_2) and (W2, [x]_2).
               The identity's first G2 point is a witness slot for a variable point (Groth16's B), here
@@ -29,8 +30,8 @@ follows this convention.
 
 Witness: w_in holds the public inputs, C1 C2 W1, the evaluations, the 5 challenge words, the inverse
 hints, the 8 column words, v, then the pairing check's part (pairing.witness_shape: its G1 slots hold
--(A1 - C0) and W2, in Montgomery form).  The MSM's operation hints and the pairing check's leaves and Q
-are witness nodes of their own.
+-(A1 - C0) and W2, in Montgomery form).  The MSM's hints (wv*, wf*, wz), the pairing check's leaves and
+Q, and the padding (wpsel, wpad0 .. wpad8) are witness nodes of their own.
 """
 
 from __future__ import annotations
@@ -90,7 +91,7 @@ def opening(X: Any, vk: dict[str, Any], ev: dict[str, Any], pub: Sequence[Any], 
     is18 = X.mul(is16, is2)
     is21 = X.mul(is18, is3)
     is24 = X.mul(is16, is8)
-    # Lagrange: L_i = w^i zh / (n (xi - w^i)), and PI = -sum pub_i L_(i+1)
+    # Lagrange: L_(i+1) = w^i zh / (n (xi - w^i)), and PI = -sum pub_i L_(i+1)
     lag = []
     for i in range(max(1, vk['nPublic'])):
         wi = pow(w, i, r)
@@ -145,7 +146,7 @@ def opening(X: Any, vk: dict[str, Any], ev: dict[str, Any], pub: Sequence[Any], 
     t22 = X.mul(X.mul(g1_, g2_), X.mul(g3_, zw))
     t2 = X.mul(X.sub(t21, t22), invzh)
     # r2 = (y^3 - xi)(y^3 - xi w) / (3 (xi - xi w)) (A / h2^2 - B / h3^2), h3 = h2 wr,
-    # A = sum_i c2_i w3^i / (y - h2 w3^i), c2_i = z + h2 t1 w3^i + h2^2 t2 w3^2i, B the same at h3
+    # A = sum_i c2_i w3^i / (y - h2 w3^i), c2_i = z + h2 t1 w3^i + h2^2 t2 w3^2i, B the same at h3 with zw, t1w, t2w
     h3 = X.mulc(h2, wr)
     ga = [z, X.mul(h2, t1), X.mul(h2s, t2)]
     gb = [zw, X.mul(h3, ev['t1w']), X.mul(X.mulc(h2s, wr * wr % r), ev['t2w'])]
@@ -290,7 +291,7 @@ class Fflonk:
 
     def pad_for(self, estimate: int, program_bytes: int, witness_bytes: int, slack: int = 64) -> int:
         """The fewest blocks of padding whose budget covers the cost, given the pruned program's and the
-        witness's bytes without padding (hand reports them).  The budget is counted low, as for Groth16
+        witness's bytes without padding (tools/harness's `hand` reports them).  The budget is counted low, as for Groth16
         (budget.budget_ok): 1,000 mWU per byte of the program, the witness, the control block and 9 bytes of
         length prefixes, plus 50,000.  The sizes must be lower bounds: a group taken adds its code to the
         pruned program, which only raises the budget.  `slack` bytes are taken off besides."""
@@ -483,7 +484,7 @@ def var_nodes(w: dict[str, Any], prefix: str = 'wv') -> dict[str, WSpec]:
 
 # ---------------------------------------------------------------------------------------------------
 # Padding.  The input's budget is 1,000 mWU per byte of its witness stack, and the verifier costs more
-# than its program and witness weigh, so a spend adds zero blocks to the witness.  How many depends on
+# than its program and witness weigh, so a spend pads its witness with blocks of zeros.  How many depends on
 # the pruned program's size, known at spend time, so the program offers groups of 1, 2, 4, ... 256
 # blocks of 512 bytes, each behind a case on a bit of the witness word `wpsel`: a group not taken is
 # pruned, and leaves only its commitment.  A block is 16 words checked to be 0, which also fixes the

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The G2 membership check (groth/core/pairing.py): after the loop, B's point at z must equal -psi^3(B) at z.
+"""The G2 membership check (groth/core/pairing.py): after the loop, its point T = [6x+2]B + psi(B) -
+psi^2(B) must equal -psi^3(B), as polynomials at z.
 For B on the twist, every other relation is made to hold: the Miller values are B's, the residue
 witness c is a fixed element, and the constant of the check is chosen so that the residue check holds:
 c^lambda times the inverse of the Miller value.

@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
 """The toy circuit end to end (the prover knows a, b with a b = c), for the Groth16 verifier
 (circuits/multiplier.circom) or the fflonk verifier (circuits/multiplier_fflonk.circom), or, with
---frontend noir, the same statement in Noir (circuits/noir/multiplier) for either verifier:
+--frontend noir, the same statement in Noir (circuits/noir/multiplier) for the Groth16 verifier:
 
-    python3 tools/demo.py setup --out build/multiplier [--frontend noir] [--protocol fflonk [--transcript sha256]]
+    python3 tools/demo.py setup --out build/multiplier [--frontend noir | --protocol fflonk [--transcript sha256]]
         circuit, verification key (verification_key.json) and verifier program (verifier.simpl)
     python3 tools/demo.py prove --out build/multiplier --sighash <64 hex digits> [--a 3 --b 7]
-        proof.json, public.json and the verifier's witness verifier.w0.json (and leaves.json for Groth16)
+        proof.json, public.json and the verifier's witness verifier.w0.json (and leaves.json for the
+        circom Groth16 circuit)
 
 `setup` records the frontend, the protocol and the transcript in demo.json, which `prove` reads.  The
 circuits bind the transaction three ways: the circom one for Groth16 by the Merkle root of its public
 values, the fflonk one by its first two public inputs (the sighash as two limbs), and the Noir one by its
 first public input (the sighash with its top three bits cleared: the Groth16 tool's --sighash-input).
 The Noir circuit is for Groth16, and goes through tools/noir_r1cs.py (nargo and noir-cli, NARGO and
-NOIR_CLI), which refuses opcodes the R1CS cannot hold soundly; circom and circomlib are not needed then.  fflonk's setup is
-universal: no ceremony for the circuit, only a powers-of-tau file.  With --transcript sha256 the proofs
-are made by tools/snarkjs_sha256.mjs, snarkjs with a SHA-256 transcript, which the verifier's SHA-256
-mode checks at a fraction of the Keccak transcript's cost.
+NOIR_CLI), which refuses opcodes the R1CS cannot hold soundly; circom and circomlib are not needed
+then.  fflonk's setup is universal: no ceremony for the circuit, only a powers-of-tau file.  With
+--transcript sha256 the proofs are made by tools/snarkjs_sha256.mjs, snarkjs with a SHA-256 transcript,
+which the verifier's SHA-256 mode checks at a fraction of the Keccak transcript's cost.
 
 Needs circom (CIRCOM, default `circom`) and `npm ci --ignore-scripts` in circuits/ (snarkjs and circomlib;
 NODE_MODULES to use another directory).  `setup` downloads a powers-of-tau file sized for the circuit
 from the perpetual powers of tau (PTAU to use a local file) and refuses it unless its BLAKE2b-512 digest
 is the one recorded below for its size (PTAU_BLAKE2B to give the digest of another file).  The key's
 alpha, beta and IC points come from that file, so a substituted file with a known trapdoor would give a
-key anyone can prove false statements for.  tools/regtest.sh runs both on a node.
+key anyone can prove false statements for.  After `setup` and `deploy compile`, tools/regtest.sh runs
+`prove` for real transactions on an Elements regtest node and spends the output.
 """
 
 import argparse
@@ -45,12 +47,12 @@ CIRCOM = os.environ.get('CIRCOM', 'circom')
 NODE_MODULES = os.environ.get('NODE_MODULES', os.path.join(ROOT, 'circuits', 'node_modules'))
 SNARKJS = os.path.join(NODE_MODULES, '.bin', 'snarkjs')
 CIRCUITS = {'groth16': 'multiplier', 'fflonk': 'multiplier_fflonk'}  # circom, by protocol
-NOIR_CIRCUIT = os.path.join(ROOT, 'circuits', 'noir', 'multiplier')  # Noir, for both
+NOIR_CIRCUIT = os.path.join(ROOT, 'circuits', 'noir', 'multiplier')  # Noir, for Groth16
 VALUES = 1  # the Groth16 circuit's public values behind the root: c
 PTAU_URL = 'https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_{power}.ptau'
 # BLAKE2b-512 of ppot_0080_{power}.ptau, the prepared files of the perpetual powers of tau after 80
 # contributions.  Recorded from the file PTAU_URL served on 2026-10-14; the ceremony's README
-# (github.com/privacy-ethereum/perpetualpowersoftau) lists the digests to compare with.
+# (github.com/privacy-scaling-explorations/perpetualpowersoftau) lists the digests to compare with.
 PTAU_BLAKE2B = {
     16: '9532c6c04a21335577713724b6d46c266a93aa621b78882b8b64b26f3080a8f0'
     'd974aded00c4d781adbdf493a45c51db455108f7aeedb49971569d57a56971c3',
@@ -76,16 +78,16 @@ def blake2b(path):
 
 def ptau(out, r1cs, protocol='groth16'):
     """A prepared powers-of-tau file for the circuit, checked against its recorded digest whether it is
-    downloaded, cached or given with PTAU.  It needs 2^power >= constraints + 2 for Groth16; for fflonk, 9
-    times its domain (fflonk_setup.js), the domain about the constraints and public inputs (a bound, with
-    room for the gates of the linear combinations).  A larger file serves as well, so the size is the
-    smallest one with a recorded digest."""
+    downloaded, cached or given with PTAU.  Groth16 needs 2^power > constraints + public signals
+    (zkey_new.js); fflonk 9 times its domain (fflonk_setup.js), the domain about the constraints and public
+    signals (a bound, with room for the gates of the linear combinations).  A larger file serves as well,
+    so the size is the smallest one with a recorded digest."""
     info = snarkjs('r1cs', 'info', r1cs, capture_output=True, text=True).stdout
     constraints = int(re.search(r'# of Constraints: (\d+)', info).group(1))
-    power = max(1, math.ceil(math.log2(constraints + 2)))
+    inputs = int(re.search(r'# of Public Inputs: (\d+)', info).group(1))
+    outputs = int(re.search(r'# of Outputs: (\d+)', info).group(1))
+    power = max(1, math.ceil(math.log2(constraints + inputs + outputs + 1)))
     if protocol == 'fflonk':
-        inputs = int(re.search(r'# of Public Inputs: (\d+)', info).group(1))
-        outputs = int(re.search(r'# of Outputs: (\d+)', info).group(1))
         power = max(8, math.ceil(math.log2(4 * (constraints + inputs + outputs) + 2)) + 4)
     if 'PTAU_BLAKE2B' not in os.environ:
         power = min((p for p in PTAU_BLAKE2B if p >= power), default=power)
@@ -247,7 +249,7 @@ def prove(a):
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('command', choices=['setup', 'prove'])
     ap.add_argument('--out', default='build/multiplier')
     ap.add_argument('--sighash', help='the sig_all_hash of the spending transaction (deploy sighash)')

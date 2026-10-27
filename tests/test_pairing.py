@@ -4,10 +4,10 @@ e(A, B) e(L, gamma) e(C, delta) e(alpha, beta) = 1, L = IC_0 + x IC_1 for a publ
 S(z) must equal Q(z) M(z), the program must accept, and it must reject witnesses that are wrong in one
 place but sealed consistently (r, Q and z recomputed), so that only the identity can catch them: a wrong
 slope, a wrong Miller value, a wrong residue witness, a wrong public input.  A wrong challenge (r or z), a
-word changed to another encoding of its value without sealing again, and a false instance must be rejected
-too.
+word changed to another encoding of its value without sealing again must be rejected too, and a false
+instance has no witness.
 
-    python3 tests/test_pairing.py
+    python3 tests/test_pairing.py    # SEED=5: the instance
 """
 
 import os

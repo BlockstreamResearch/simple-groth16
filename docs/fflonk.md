@@ -43,7 +43,7 @@ tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/ff
 python3 tools/demo.py prove --out build/fflonk --sighash <the spending transaction's sighash>
 ```
 
-`setup` compiles the circuit, runs snarkjs's fflonk setup, exports the verification key and writes the program. `prove` makes the proof (with `tools/snarkjs_sha256.mjs` for the SHA-256 mode) and the padded witness. `tools/regtest.sh build/fflonk` runs the whole flow on an Elements regtest node, as for Groth16. `make fflonk-demo` runs setup and prove in both modes, without a node.
+`setup` compiles the circuit, runs snarkjs's fflonk setup, exports the verification key and writes the program. `prove` makes the proof (with `tools/snarkjs_sha256.mjs` for the SHA-256 mode) and the padded witness. `tools/regtest.sh build/fflonk` runs the whole flow on an Elements regtest node, as for Groth16, and `tools/liquid.py` spends the verifier on Liquid testnet or Liquid (README). `make fflonk-demo` runs setup and prove in both modes, without a node.
 
 For your own circuit, use `tools/fflonk_snarkjs.py`:
 
@@ -64,7 +64,7 @@ The witness holds the public inputs, the points C1, C2 and W1, the 15 evaluation
 
 Each challenge is the transcript's digest, reduced mod r. The prover supplies the reduced challenge, the program hashes the transcript and checks digest = word (mod r). The next transcript absorbs the word, as snarkjs absorbs the reduced challenge.
 
-Keccak-f[1600] takes about 120 jets per round: `xor_xor_64` for theta's column parities, `xor_64`, `left_rotate_64` for rho, and `ch_64` for chi, since b0 ^ (~b1 & b2) = ch(b1, b0, b0 ^ b2). A round is one function, ROUND, called 24 times by KECCAKF. The state is a balanced tree of the 25 lanes, each holding its 8 bytes little-endian. A 32-byte big-endian word becomes 4 lanes by re-pairing byte projections, with no jet. One permutation costs 5.25 M mWU, and the jets are only 11 k of each round's 220 k: the rest is moving lanes. fflonk's transcript needs 9 permutations. The same code is published on its own as [simple-keccak](https://github.com/BlockstreamResearch/simple-keccak).
+Keccak-f[1600] takes about 120 jets per round: `xor_xor_64` for theta's column parities, `xor_64`, `left_rotate_64` for rho, and `ch_64` for chi, since b0 ^ (~b1 & b2) = ch(b1, b0, b0 ^ b2). A round is one function, ROUND, called 24 times by KECCAKF. The state is a balanced tree of the 25 lanes, each holding its 8 bytes little-endian. A 32-byte big-endian word becomes 4 lanes by re-pairing byte projections, with no jet. One permutation costs 5.25 M mWU, and the jets are only 11 k of each round's 220 k: the rest is moving lanes. fflonk's transcript needs 9 permutations, 2 + 1 + 1 + 4 + 1 for its five challenges.
 
 ### The opening
 
@@ -80,16 +80,16 @@ That leaves 22 inverse hints, plus one per public input.
 
 ### The MSM
 
-A1 - C0 = q1 C1 + q2 C2 - t W1 + y W2 - e G1, with four points from the proof and one constant (`groth/core/msm.py`).
+A1 - C0 = q1 C1 + q2 C2 - t W1 + y W2 - e G1, with four points from the proof and one constant (`groth/core/msm.py`). C0 is the key's commitment and C1, C2, W1, W2 the proof's. The scalars come from the opening: the quotients q1 and q2, e = r0 + q1 r1 + q2 r2 from the evaluations of r0, r1 and r2, t = y^8 - xi, and y.
 
 **Group law.** Points are affine. The prover supplies each operation's slope, and for an addition also d = 1 / (x_Q - x_T). The program checks
 
 - λ (x_Q - x_T) = y_Q - y_T and d (x_Q - x_T) = 1 for an addition;
 - λ y = 3/2 x² for a doubling.
 
-The inverse makes x_Q ≠ x_T, so the slope is the chord's. A doubling needs none: y = 0 would make x = 0, and (0, 0) is not on the curve. So every point the program computes is on the curve and is the group-law result. ADD and DBL are functions of the program.
+The inverse makes x_Q ≠ x_T, so the slope is the chord's. A doubling needs no inverse, since no point of the curve has y = 0: x³ = -3 has no solution in F_p, as the group's order r is odd. So every point the program computes is on the curve and is the group-law result. ADD and DBL are functions of the program.
 
-**Variable base.** GLV splits each scalar k = n1 + λ n2 (mod r) into two odd halves below 2^128 in absolute value. So each point gives two columns, P and φ(P) = (β x, y). An odd n with |n| < 2^128 is Σ d_j 2^j with every digit ±1, d_j = 2 c_j - 1 for the bits c of C = (n + 2^128 - 1) / 2. The prover supplies C, and the program checks n1 + λ n2 = k in F_r.
+**Variable base.** GLV uses the endomorphism φ(P) = (β x, y), which multiplies a point by a constant μ. It splits each scalar k = n1 + μ n2 (mod r) into two odd halves below 2^128 in absolute value, so each point gives two columns, P and φ(P). An odd n with |n| < 2^128 is Σ d_j 2^j with every digit ±1, d_j = 2 c_j - 1 for the bits c of C = (n + 2^128 - 1) / 2. The prover supplies C, and the program checks n1 + μ n2 = k in F_r.
 
 The eight columns form two groups of four. Each group has a table of the 8 sums Q1 ± Q2 ± Q3 ± Q4, built at run time with 14 additions. A step's digits select d1 (Q1 + d1 d2 Q2 + d1 d3 Q3 + d1 d4 Q4): the entry by the bits c1 xor ck, the sign by c1. So the loop is 128 steps, each a doubling and two additions, with no digit 0 to skip.
 
@@ -111,7 +111,7 @@ A version for two fixed G2 points would save B's slope relations, about 15 M.
 
 The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. The verifier costs more than its program and witness weigh, so a spend adds zero blocks of 512 bytes to the witness. A block costs 0.05 to 0.12 M mWU to check, depending on its group, and earns 0.51 M.
 
-How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size. What it measures is a lower bound, since the groups taken add their code, so the budget it predicts is one too.
+How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size (about 6 minutes), with no group taken and, since `hand`'s dummy sighash is not the transaction's, without the binding. The groups and the binding add their code, so the real program is larger and earns more budget than predicted: the estimate errs on the safe side.
 
 ## Soundness
 
@@ -127,4 +127,4 @@ How many blocks a spend needs depends on the pruned program's size, which is kno
 
 - `tests/test_keccak.py`: the permutation and Keccak-256 of 1 to 9 words, against hashlib and test vectors.
 - `tests/test_msm.py`: the group law, the variable-base MSM with and without GLV, and the fixed base, with wrong hints rejected.
-- `tests/test_fflonk.py`: both modes on the proofs in `examples/fflonk`. The honest witness passes at the predicted cost, also padded so the budget covers it. These are rejected: a tampered evaluation, challenge, public input, inverse, column word, scalar, MSM hint, G1 slot or G2 slot, and a valid proof for another sighash.
+- `tests/test_fflonk.py`: both modes on the proofs in `examples/fflonk`. The honest witness passes at the predicted cost, also padded so the budget covers it. These are rejected: a tampered evaluation, challenge, public input, inverse, column word, scalar, MSM hint, G1 slot or G2 slot, and, in Keccak mode, a valid proof for another sighash.

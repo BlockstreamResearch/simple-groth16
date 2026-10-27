@@ -6,11 +6,14 @@
 
 `compile` runs `nargo compile` (NARGO, version 1.0.0-beta.19) into a fresh directory and refuses the
 circuit unless every ACIR opcode is one the R1CS can hold soundly and its public signals are its public
-parameters (below), then converts the artifact that run wrote, whose ACIR it checked, with `noir-cli
-interop` (NOIR_CLI, from Noir-Groth16 at commit 4b7caace1f21) to x.r1cs, the circuit snarkjs sets up, and
-keeps that artifact (x.noir.json).  It never reads the circuit's own target/ directory.  `witness` converts that artifact again for the inputs and writes x.wtns, the witness
-snarkjs proves with, after checking that the R1CS is x.r1cs byte for byte.  inputs.json gives the circuit's parameters by name, as the ABI shapes them:
-{"sighash": ["<decimal>", "<decimal>"], "c": "21", ...}.
+parameters (below).  It then converts the artifact that run wrote, whose ACIR it checked, with `noir-cli
+interop` to x.r1cs, the circuit snarkjs sets up, and keeps that artifact (x.noir.json) and the opcode
+kinds (x.opcodes.json).  It never reads the circuit's own target/ directory.  noir-cli is Noir-Groth16 at
+commit 4b7caace1f2128e454c8d0fe50cac1ec46b1e272 (NOIR_CLI; install it by that full hash: the tool cannot
+check it).  `witness` converts that artifact again for the inputs and writes x.wtns, the witness snarkjs
+proves with, after checking that the R1CS is x.r1cs byte for byte; it needs the same --trust as `compile`.
+inputs.json gives the circuit's parameters by name, as the ABI shapes them, all as decimal strings:
+{"sighash": "<decimal>", "c": "21", "a": "3", "b": "7"} for circuits/noir/multiplier.
 
 Why the checks.  The converter lowers some black-box functions with constraints (RANGE, AND, XOR, by bit
 decomposition), but writes others, Keccak-f among them, as unconstrained hints: the R1CS would accept any
@@ -20,17 +23,20 @@ whose outputs the circuit must constrain, as in any Noir backend) and the black 
 and `witness` refuses an R1CS that changed with the inputs.  --trust NAME[,NAME...] allows more opcode
 kinds (a black box by its name, MEMORY, CALL), at the user's risk: review how noir-cli lowers them first.
 
-nargo's warnings are fatal (--deny-warnings), among them its check for Brillig outputs the circuit leaves
-unconstrained, which it otherwise only prints.  The check is a heuristic: it misses some
-under-constrained hints and flags some constrained ones.  --allow-nargo-warnings prints the warnings
-instead, for a circuit reviewed to constrain what nargo flags.
+nargo's warnings are fatal: the tool passes --deny-warnings and refuses any bug, error or warning line on
+stderr.  Among them is nargo's check for Brillig outputs the circuit leaves unconstrained, which nargo on
+its own only prints.  The check is a heuristic: it misses some under-constrained hints and flags some
+constrained ones.  --allow-nargo-warnings prints the warnings instead, for a circuit reviewed to
+constrain what nargo flags.  With --deny-warnings, nargo also requires a `// Safety:` comment above each
+`unsafe` block.
 
 noir-cli makes the circuit's first ACIR witnesses the public signals, whatever their visibility: nargo
 numbers the parameters in the order they are declared, and the return values after them.  So `compile`
-refuses a circuit unless its public parameters are declared before any private one and it returns
-nothing.  The public signals are then the public parameters, in order.  For a verifier bound to the
-transaction, the first is the sighash with its top three bits cleared (the Groth16 tool's
---sighash-input); fflonk's --bind takes the sighash as two 128-bit limbs, high then low, as the first two.
+refuses a circuit unless it has a public parameter, its public parameters are declared before any
+private one, and it returns nothing.  The public signals are then the public parameters, in order.  For
+a verifier bound to the transaction, the first is the sighash with its top three bits cleared (the
+Groth16 tool's --sighash-input); fflonk's --bind takes the sighash as two 128-bit limbs, high then low,
+as the first two.
 """
 
 import argparse
@@ -241,11 +247,13 @@ def witness(inputs, out, trust=()):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('command', choices=['compile', 'witness'])
     ap.add_argument('files', nargs='+', help='compile: CIRCUIT_DIR INPUTS (any satisfying inputs); witness: INPUTS')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--trust', default='', help='opcode kinds to allow besides ASSERT, BRILLIG, RANGE, AND, XOR')
+    ap.add_argument(
+        '--trust', default='', help='comma-separated opcode kinds to allow besides ASSERT, BRILLIG, RANGE, AND, XOR'
+    )
     ap.add_argument('--allow-nargo-warnings', action='store_true', help="print nargo's warnings instead of refusing")
     a = ap.parse_args(argv)
     trust = [t for t in a.trust.split(',') if t]

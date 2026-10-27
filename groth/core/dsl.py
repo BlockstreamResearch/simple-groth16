@@ -19,7 +19,8 @@ WSpec = dict[str, Any]  # a witness value spec of tools/harness: {'w': hex} or {
 
 
 class CheckFailed(AssertionError):
-    """A static bound or a numeric-model check failed."""
+    """A static bound, a numeric-model check or a check on an input (a snarkjs file, a proof, a witness)
+    failed; the tools report it as a refusal."""
 
 
 def ensure(cond: object, msg: str = 'check failed') -> None:

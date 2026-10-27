@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Writes fp_mul.simpl: one F_p product of the two witness words in fp_mul.w0.json, checked against
-the expected product.
+the expected product.  Each word is first checked below 2^254, as the verifiers check the words they
+multiply: the reduction is exact only within the static bound the generator assumes.
 
     python3 examples/fp_mul.py > examples/fp_mul.simpl
 """
@@ -19,8 +20,17 @@ with open(os.path.join(HERE, 'fp_mul.w0.json')) as f:
 a, b = (int(x['w'], 16) for x in w)
 be = Sym(512)
 fp = F.Fp(be)
-x, y = F.Val(be.proj('OH', 256), F.P - 1), F.Val(be.proj('IH', 256), F.P - 1)
-body = fp.assert_eq_const(fp.mul(x, y), F.from_mont(a) * F.from_mont(b) % F.P)
+F_HI = 2**254 - 1  # the bound of a checked word (pairing.F_HI)
+x, y = F.Val(be.proj('OH', 256), F_HI), F.Val(be.proj('IH', 256), F_HI)
+
+
+def below_2_254(w):
+    """The word's two top bits are 0 (pairing.PairingCheck.top2_zero)."""
+    return be.verify(be.not1(be.jet('or_1', be.sub(w, 'OOOOOOO', 2), 1)))
+
+
+product = fp.assert_eq_const(fp.mul(x, y), F.from_mont(a) * F.from_mont(b) % F.P)
+body = be.checks([below_2_254(x.e), below_2_254(y.e), product])
 be.em.define('w_in', 'witness', '_ -> (2^256 * 2^256)')
 be.em.define('main', f'comp w_in ({body.t})')
 sys.stdout.write(be.em.text())

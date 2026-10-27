@@ -1,7 +1,7 @@
 [project]
 name = "simple-groth16"
 version = "0.1.0"
-description = "A Groth16 verifier for Simplicity"
+description = "Simplicity verifiers of Groth16 and fflonk proofs on BN254, generated from snarkjs keys"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

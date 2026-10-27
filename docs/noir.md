@@ -75,7 +75,7 @@ tools/harness/target/release/deploy compile build/noir/verifier.simpl build/noir
 tools/regtest.sh build/noir
 ```
 
-`setup` compiles and converts the circuit, runs the Groth16 setup with one contribution, and writes the program. `deploy compile` parses the program's 5.4 MB of text in about 10 minutes. `prove` (which `regtest.sh` calls) makes the circuit's witness, the proof and the program's witness. `make noir-demo` runs setup and prove without a node.
+`setup` compiles and converts the circuit, runs the Groth16 setup with one contribution, and writes the program. `deploy compile` parses the program's 5.4 MB of text in about 10 minutes. `prove` (which `regtest.sh` calls) makes the circuit's witness, the proof and the program's witness. `make noir-demo` runs setup and prove without a node. On Liquid testnet or Liquid, `tools/liquid.py` spends the verifier (README).
 
 For your own circuit, declare its public parameters before any private one, the sighash first, and return nothing. Then:
 

@@ -43,7 +43,7 @@ tools/harness/target/release/deploy compile build/fflonk/verifier.simpl build/ff
 python3 tools/demo.py prove --out build/fflonk --sighash <the spending transaction's sighash>
 ```
 
-`setup` compiles the circuit, runs snarkjs's fflonk setup, exports the verification key and writes the program. `prove` makes the proof (with `tools/snarkjs_sha256.mjs` for the SHA-256 mode) and the padded witness. `tools/regtest.sh build/fflonk` runs the whole flow on an Elements regtest node, as for Groth16. `make fflonk-demo` runs setup and prove in both modes, without a node.
+`setup` compiles the circuit, runs snarkjs's fflonk setup, exports the verification key and writes the program. `prove` makes the proof (with `tools/snarkjs_sha256.mjs` for the SHA-256 mode) and the padded witness. `tools/regtest.sh build/fflonk` runs the whole flow on an Elements regtest node, as for Groth16, and `tools/liquid.py` spends the verifier on Liquid testnet or Liquid (README). `make fflonk-demo` runs setup and prove in both modes, without a node.
 
 For your own circuit, use `tools/fflonk_snarkjs.py`:
 

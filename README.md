@@ -19,6 +19,7 @@ A Python generator compiles a snarkjs verification key into a Simplicity program
 | proofs | snarkjs `groth16` | snarkjs `fflonk` (Keccak-256 transcript), or `tools/snarkjs_sha256.mjs` (SHA-256 transcript) |
 | cost, toy circuit | 48.6 M mWU (circom), 55.3 M mWU (Noir) | 123.2 M mWU (SHA-256), 172.0 M mWU (Keccak), before padding |
 | spending transaction | 53.3 kWU (circom), 67.8 kWU (Noir) | 126.6 kWU (SHA-256), 185.3 kWU (Keccak) |
+| spent on | Elements regtest and Liquid testnet | Elements regtest and Liquid testnet |
 
 Every transaction fits under the 400 kWU standard limit. A spend's budget is 1,000 mWU per byte of the input's witness stack (the program and its witness), plus 50,000, and the Groth16 programs earn more budget than they cost. The fflonk program costs more, so its spends pad the witness to pay for it.
 
@@ -111,7 +112,27 @@ python3 tools/demo.py setup --protocol fflonk --transcript sha256 --out build/ff
 python3 tools/demo.py setup --frontend noir --out build/noir
 ```
 
-`deploy` also knows `liquidtestnet` and `liquid`. There, `deploy wallet` and `deploy send` move coins (on Liquid testnet, from the faucet) to the verifier's address as an explicit output, and the transactions can be broadcast through any Esplora instance. The current verifiers have been run on regtest only.
+## On Liquid testnet and Liquid
+
+Simplicity is active on Liquid, [since July 2025](https://blog.blockstream.com/simplicity-launches-on-liquid-mainnet/), and on Liquid testnet. The verifiers run there unchanged: only the address and the transaction depend on the network, and `deploy` knows both networks' parameters. `tools/liquid.py` spends a verifier's output on either network, or on a regtest node. It reads the chain through an Esplora server (Blockstream's by default) or your own node (`--node "elements-cli ..."`), and builds every transaction with `deploy`. It needs only Python and the harness.
+
+```sh
+L="python3 tools/liquid.py"; P=build/multiplier/verifier.uprog; N="--network liquidtestnet"   # or liquid
+$L address $P $N              # the verifier's address, to fund with an explicit output
+$L faucet <address>           # Liquid testnet only: test coins from liquidtestnet.com
+$L utxos $P $N                # the outputs that pay the verifier
+$L prove $P <txid>:<vout> <your address> $N \
+   --prove "python3 tools/demo.py prove --out build/multiplier --sighash {sighash}" \
+   --witness build/multiplier/verifier.w0.json --broadcast
+```
+
+The proof binds the spending transaction, fee included, so the fee is fixed before proving. `prove` runs your prover with the sighash in place of `{sighash}`, builds the transaction, and proves again if the size it measures needs a higher fee. The fee rate is 0.1 sat/vB, Liquid's minimum relay feerate, unless you give `--fee-rate`. Pass `--vsize` from an earlier spend of the same verifier to prove once. With a prover the tool should not run, use two steps: `sighash` prints the sighash for a fee, and `spend` builds the transaction from your witness file. For your own verifier, give its `.uprog` and a prover that ends with the witness command of its binding ([Your circuit](#your-circuit)).
+
+Nothing is sent without `--broadcast`. The transaction is printed, or written with `--out`. `deploy` executes it first, and refuses a transaction whose cost its budget does not cover, that needs more Bit Machine cells than consensus allows, or that is above the standard weight. With `--node`, testmempoolaccept checks it as well. `python3 tools/liquid.py --help` has every command, including `keyspend` and `broadcast`.
+
+Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 4,600 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
+
+> ⚠️ The toy statements are public: anyone can prove a·b = c for their own transaction. Once your funding transaction is seen, anyone can race you to the output. Fund a toy verifier on Liquid only with what you would give away. A verifier for your own circuit is as safe as that circuit's statement and setup.
 
 ## Your circuit
 
@@ -137,7 +158,7 @@ A circuit that follows none of these conventions needs `--unbound`. Each of its 
 | `groth/groth16/` | the Groth16 verifier |
 | `groth/fflonk/` | the fflonk verifier, and `reference.py`, a port of snarkjs's fflonk verifier |
 | `circuits/` | `public_merkle.circom` (the Merkle binding), the toy `multiplier.circom`, `multiplier_fflonk.circom` for fflonk, and `noir/multiplier`, the toy statement in Noir |
-| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (from a snarkjs key and proof to the program and its witness), `noir_r1cs.py` (a Noir circuit as R1CS), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `demo.py` (the toy circuits end to end) and `regtest.sh` |
+| `tools/` | `groth16_snarkjs.py` and `fflonk_snarkjs.py` (from a snarkjs key and proof to the program and its witness), `noir_r1cs.py` (a Noir circuit as R1CS), `snarkjs_sha256.mjs` (fflonk proofs with a SHA-256 transcript), `demo.py` (the toy circuits end to end), `regtest.sh` (the toy circuits on a regtest node) and `liquid.py` (spending a verifier on Liquid, Liquid testnet or regtest) |
 | `tools/harness/` | Rust: `hand` runs generated programs for the tests, `costs` and `sizes` profile them, `deploy` builds addresses and transactions |
 | `tests/` | one test per layer, plus `test_bn254_ref.py` against py_ecc |
 | `examples/` | generated programs and the test fixtures ([examples/README.md](examples/README.md)) |
@@ -150,7 +171,7 @@ A circuit that follows none of these conventions needs `--unbound`. Each of its 
 
 ## Credits and references
 
-- [Simplicity](https://github.com/BlockstreamResearch/simplicity), rust-simplicity and libsimplicity (Blockstream Research): the language, and the parser and cost model the harness uses. [Elements](https://github.com/ElementsProject/elements) and Liquid: the chain the programs run on.
+- [Simplicity](https://github.com/BlockstreamResearch/simplicity), rust-simplicity and libsimplicity (Blockstream Research): the language, and the parser and cost model the harness uses. [Elements](https://github.com/ElementsProject/elements) and Liquid: the chain the programs run on. [Esplora](https://github.com/Blockstream/esplora) (Blockstream) and the [Liquid testnet faucet](https://liquidtestnet.com/faucet) (Valerio Vaccaro), which `tools/liquid.py` uses.
 - [circom, circomlib](https://github.com/iden3/circom) and [snarkjs](https://github.com/iden3/snarkjs) (iden3): circuits, setups and proofs. `groth/fflonk/reference.py` ports snarkjs's fflonk verifier.
 - [Noir](https://noir-lang.org) (Aztec), and [Noir-Groth16](https://github.com/jamesbachini/Noir-Groth16) (James Bachini), whose `noir-cli` converts Noir's ACIR to R1CS.
 - The [perpetual powers of tau](https://github.com/privacy-scaling-explorations/perpetualpowersoftau) ceremony (Privacy & Scaling Explorations), whose files the demo's setups use.

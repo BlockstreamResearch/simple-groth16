@@ -80,7 +80,7 @@ Measured on a 2-core cloud VM.
 
 ## Reproducing
 
-The tests print the costs and sizes (`make bench` for the F_p operations, `make -j4 test` for the rest). The weights come from `deploy spend` and `tools/regtest.sh`, and the times from running the commands.
+The tests print the costs and sizes (`make bench` for the F_p operations, `make -j4 test` for the rest). The weights come from `deploy spend`, `tools/regtest.sh` and `tools/liquid.py`, and the times from running the commands.
 
 ```sh
 python3 tests/test_fp.py bench   # F_p operations
@@ -108,14 +108,15 @@ python3 tools/groth16_snarkjs.py witness $E/verification_key.json $E/proof.json 
 gunzip -c $E/verifier.simpl.gz | cmp - build/check.simpl && gunzip -c $E/verifier.w0.json.gz | cmp - build/check.w0.json
 ```
 
-## Runs on a node
+## Runs on a network
 
-`tools/regtest.sh` on Elements 23.3.1 regtest, with each toy circuit. Each run spends one output with the proof, shows that the same proof is rejected in a transaction paying someone else (`Assertion failed inside jet`), and spends a second output of the same leaf through a key path.
+Each toy verifier's output was spent with its proof on an Elements 23.3.1 regtest node (standardness enforced) by `tools/regtest.sh`, and on Liquid testnet by `tools/liquid.py prove`. On regtest, the script also shows that the same proof is refused in a transaction paying someone else (`Assertion failed inside jet`), and spends a second output of the same leaf through its key path, at 721 WU. Liquid testnet refuses a redirected proof in the same way.
 
-| verifier | proof spend | key path |
+| verifier | regtest: proof spend | Liquid testnet: proof spend |
 |---|---|---|
-| Groth16, circom | 53,315 WU, 13,329 vB | 721 WU |
-| Groth16, Noir | 67,803 WU, 16,951 vB | 721 WU |
-| fflonk, SHA-256 transcript | 126,589 WU, 31,648 vB | 721 WU |
+| Groth16, circom | 53,315 WU | [`e2ef29c6…`](https://blockstream.info/liquidtestnet/tx/e2ef29c65f059af741c3bd5623e22c2926703bc662f15d0582734630cfc7a44d), 53,314 WU, fee 1,334 sat |
+| Groth16, Noir | 67,803 WU | [`6224147f…`](https://blockstream.info/liquidtestnet/tx/6224147f1463e43bde8b5044b6c9a85849d98fc6647aa8122aea336f8d4fbdd6), 67,812 WU, fee 1,697 sat |
+| fflonk, SHA-256 transcript | 126,589 WU | [`dc5b3334…`](https://blockstream.info/liquidtestnet/tx/dc5b333468ef696594df2956be9c00c22d0cc73cb0ad6aaca41ce6488cc02c93), 126,577 WU, fee 3,166 sat |
+| fflonk, Keccak transcript | 185.3 kWU | [`5a64e6be…`](https://blockstream.info/liquidtestnet/tx/5a64e6beb6e02e42d2a1c4eda88cd26ebffd72015fc646700e63932dd043da79), 185,285 WU, fee 4,634 sat |
 
-The weights vary by a few WU between runs, with the signature and the transaction's other fields.
+The Liquid testnet spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next. The Keccak row's regtest weight is the one in [fflonk.md](fflonk.md), from an earlier regtest run.

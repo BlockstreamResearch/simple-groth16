@@ -58,6 +58,8 @@ Each test generates programs for one layer and runs them through `hand`, which e
 
 ## The toy circuit on regtest
 
+![From a circom circuit to a Liquid spend: what circom and snarkjs produce, what the Python generator produces, and what deploy builds](docs/architecture.png)
+
 `circuits/multiplier.circom` is a toy statement: the prover knows `a` and `b` with `a * b = c`. Its public signal is the Merkle root of the spending transaction's sighash and `c`. Anyone with its proving key can satisfy it for any `c`, so it locks nothing of value.
 
 1. Build the key and the program:

@@ -30,7 +30,7 @@ def main():
     depth = binding.depth_of(len(leaves))
     root = binding.public_signal(binding.root(leaves))
     sibs = binding.siblings(leaves)
-    assert len(sibs) == depth == 2 and Groth16.root(DUMMY_SIGHASH, sibs) == root
+    assert len(sibs) == depth == 2 and binding.bound_signal(DUMMY_SIGHASH, sibs) == root
     vk, proof, inputs = B.groth16_instance(1, seed=11, inputs=[root])
     assert B.groth16_verify(vk, proof, inputs)
     bnd = PC.bounds()

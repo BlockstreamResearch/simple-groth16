@@ -24,7 +24,7 @@ fn main(sighash: pub Field, c: pub Field, a: Field, b: Field) {
 
 The circuit needs no constraint on the sighash. snarkjs's setup adds one row per public input, so each input's point in the key is independent, and changing an input invalidates the proof. The tests check this with a valid proof for another sighash, which the program rejects.
 
-Every public input costs about 6.6 M mWU and 14 kB of program. The toy circuit has two (the sighash and c), where the circom one has one (the root).
+The toy circuit has two public inputs (the sighash and c), where the circom one has one (the root). The second costs 6.6 M mWU and 14 kB of program.
 
 ## What the tools check
 
@@ -36,7 +36,7 @@ noir-cli is experimental, and it lowers some ACIR opcodes in ways a verifier mus
 So `noir_r1cs.py compile` reads `nargo compile --print-acir` and allows only these opcodes:
 
 - assertions (`ASSERT`);
-- Brillig calls, Noir's unconstrained code. The circuit must constrain their outputs, as with any Noir backend. nargo checks for outputs left unconstrained, but only prints what it finds, so the tool makes its warnings fatal (`--deny-warnings`). The check is a heuristic: it misses some under-constrained hints and flags some constrained ones (a hint checked under an `if`, say). `--allow-nargo-warnings` prints the warnings instead, for a circuit you have reviewed.
+- Brillig calls, Noir's unconstrained code. The circuit must constrain their outputs, as with any Noir backend. nargo checks for outputs left unconstrained, but on its own only prints what it finds. So the tool makes its warnings fatal: it passes `--deny-warnings`, and refuses any bug, error or warning line on stderr whatever nargo's exit status. With `--deny-warnings`, nargo also requires a `// Safety:` comment above each `unsafe` block. The check is a heuristic: it misses some under-constrained hints and flags some constrained ones (a hint checked under an `if`, say). `--allow-nargo-warnings` prints the warnings instead, for a circuit you have reviewed.
 - the black boxes `RANGE`, `AND` and `XOR`, which noir-cli lowers by bit decomposition.
 
 It refuses any other black box, memory operations, calls and any line it does not recognize. `--trust` allows more kinds, after you have read how noir-cli lowers them.
@@ -45,7 +45,7 @@ nargo compiles into a fresh directory, and the tool converts the artifact that r
 
 noir-cli makes the circuit's first ACIR witnesses the public signals, whatever their visibility, and nargo numbers the parameters in the order they are declared, return values last. So the tool also refuses a circuit unless its public parameters come before any private one and it returns nothing. Otherwise a private parameter would become a public signal, published in the spend, and a declared public input would be missing from the statement.
 
-`noir_r1cs.py witness` converts the compiled circuit again for each proof's inputs. It refuses the result unless the R1CS is the one the key was made from, byte for byte.
+`noir_r1cs.py witness` converts the compiled circuit again for each proof's inputs. It refuses the result unless its R1CS is byte for byte the `x.r1cs` that `compile` wrote, the file the key is made from.
 
 The versions are pinned:
 
@@ -75,7 +75,7 @@ tools/harness/target/release/deploy compile build/noir/verifier.simpl build/noir
 tools/regtest.sh build/noir
 ```
 
-`setup` compiles and converts the circuit, runs the Groth16 setup with one contribution, and writes the program. `prove` (which `regtest.sh` calls) makes the witness, the proof and the program's witness. `make noir-demo` runs both without a node.
+`setup` compiles and converts the circuit, runs the Groth16 setup with one contribution, and writes the program. `deploy compile` parses the program's 5.4 MB of text in about 10 minutes. `prove` (which `regtest.sh` calls) makes the circuit's witness, the proof and the program's witness. `make noir-demo` runs setup and prove without a node.
 
 For your own circuit, declare its public parameters before any private one, the sighash first, and return nothing. Then:
 
@@ -92,7 +92,7 @@ python3 tools/groth16_snarkjs.py witness verification_key.json proof.json public
 
 ## fflonk
 
-The fflonk verifier binds by two public inputs instead: the sighash as two 128-bit limbs (`fflonk_snarkjs.py --bind`). A Noir circuit whose first two public parameters are those limbs works with it, through the same `noir_r1cs.py` and snarkjs's `fflonk setup`. The demo's circuit is for Groth16, which is cheaper.
+The fflonk verifier binds by two public inputs instead: the sighash as two 128-bit limbs (`fflonk_snarkjs.py --bind`). A Noir circuit whose first two public parameters are those limbs should work with it, through the same `noir_r1cs.py` and snarkjs's `fflonk setup`, but this pairing is not tested. The demo's circuit is for Groth16, which is cheaper.
 
 ## Tests
 
@@ -100,7 +100,7 @@ The fflonk verifier binds by two public inputs instead: the sighash as two 128-b
 
 - **The opcode check, on canned `--print-acir` output.** Assertions, Brillig calls and RANGE pass. Keccak-f, memory and calls are refused, and so is a line the check does not know.
 - **The layout check.** Public parameters declared first pass. A private parameter before a public one, and a return value, are refused.
-- **nargo's run, stubbed.** The artifact converted is the one the run wrote, not a decoy under the circuit's `target/` named in its `Nargo.toml`. A diagnostic on stderr with exit status 0, as nargo prints for an unconstrained Brillig output, is refused.
+- **nargo's run, stubbed.** The artifact converted is the one the run wrote, not a decoy under the circuit's `target/` named in its `Nargo.toml`. A diagnostic on stderr is refused even when nargo exits 0.
 - **The verifier, on the proofs in `examples/noir`.** The proof for the harness's sighash passes at the predicted cost, within its budget. A valid proof for another sighash is rejected, and so is a wrong c.
 
 `tests/test_tools.py` checks the `--sighash-input` flags.

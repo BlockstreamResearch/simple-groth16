@@ -1,6 +1,6 @@
 # The Groth16 verifier
 
-This document explains how the verifier checks a Groth16 proof inside a Simplicity program, and why that program is produced by a designated Python generator instead of being written in SimplicityHL. Most of it, the generator's method, the field arithmetic and the pairing check, is shared with the fflonk verifier ([fflonk.md](fflonk.md)).
+This document explains how the verifier checks a Groth16 proof inside a Simplicity program, and why that program is produced by a dedicated Python generator instead of being written in SimplicityHL. Most of it, the generator's method, the field arithmetic and the pairing check, is shared with the fflonk verifier ([fflonk.md](fflonk.md)).
 
 ## Simplicity in brief
 
@@ -17,7 +17,7 @@ The cost must fit a budget of 1,000 mWU per byte of the spending input's witness
 
 ## Python generator
 
-The Groth16 verifier performs about 4,500 multiplications in the BN254 field, each made of several 256-bit jet calls, plus the data movement between them. At this scale the cost is decided by how values are laid out and moved, and the program has to control that precisely to fit the budget. That control is what the generator provides.
+The Groth16 verifier performs thousands of multiplications in the BN254 field, each made of several 256-bit jet calls, plus the data movement between them. At this scale the cost is decided by how values are laid out and moved, and the program has to control that precisely to fit the budget. That control is what the generator provides.
 
 ### Why not SimplicityHL
 
@@ -37,7 +37,7 @@ We measured the same arithmetic both ways, with SimplicityHL 0.8.0 and the same 
 
 | | this generator | SimplicityHL, idiomatic | SimplicityHL, hand-tuned |
 |---|---:|---:|---:|
-| one F_p product | 16,116 mWU | 32,492 (2.0x) | 18,440 (1.14x) |
+| one F_p product, its operands and result moved | 16,116 mWU | 32,492 (2.0x) | 18,440 (1.14x) |
 | 12-term dot product, one reduction | 116,744 mWU | 472,888 (4.1x) | 141,332 (1.21x) |
 
 Almost all of the verifier's work has the shape of the second row. Idiomatic SimplicityHL would make the verifier about four times as expensive, far beyond what its bytes pay for; hand-tuned SimplicityHL would add about 20%.
@@ -99,7 +99,7 @@ Words taken straight from the witness can be any 256-bit value. The jets reduce 
 
 Because words are not reduced, the program tests whether a value is zero by comparing it with the few multiples of p its bound allows.
 
-A product costs about 13 k mWU, and a reduction about 7.8 k.
+A product costs about 13 k mWU, and a 12-term dot product 117 k, where twelve separate products would cost 159 k before their sum ([benchmarks.md](benchmarks.md)).
 
 ## F_p12 as polynomials (poly.py)
 
@@ -136,23 +136,30 @@ doubling:  λ y - 3/2 x^2 = 0
 addition:  λ (xQ - x) - (yQ - y) = 0
 ```
 
-Each slope equation has exactly one solution, so a slope that passes is the true one and every step is the group law: the prover has no freedom. For a doubling this is because y is never 0 (the twist has no points of order 2). For an addition it needs xQ != x, and that holds at every addition of the loop, for every point B of the twist, so the program does not check it. The twist's group of points is cyclic, of order r h with h = 10069 · 5864401 · 1875725156269 · (a 178-bit prime). At an addition, T = [k] B and Q = [q] B, with q = ±1 for the additions of ±B. For the Frobenius additions of ψ(B) and -ψ^2(B), q = μ and -μ^2, where μ is the eigenvalue by which ψ acts on each prime part of the group. T = Q needs an order of B that divides k - q, so some prime of r h that divides k - q, and tests/test_g2_check.py finds none for any of the 23 additions; the generator checks the same (`pairing.additions_avoid_q`) before it emits a program. (T = -Q makes the slope equation 0 = 2 yQ, which fails.) An earlier version had the prover supply an inverse d with (xQ - x) d - 1 = 0: 23 words of F_p2 and 23 relations, which this argument makes unnecessary. All of this F_p2 arithmetic is polynomial arithmetic modulo M too, since F_p2 sits inside F_p12, so these relations join the same identity.
+Each slope equation has exactly one solution, so a slope that passes is the true one and every step is the group law: the prover has no freedom. All of this F_p2 arithmetic is polynomial arithmetic modulo M too, since F_p2 sits inside F_p12, so these relations join the same identity.
+
+For a doubling, the solution is unique because y is never 0: the twist has no points of order 2. For an addition it needs xQ ≠ x. That holds at every addition of the loop, for every point B of the twist, so the program does not check it:
+
+- The twist's group of points is cyclic, of order r h with h = 10069 · 5864401 · 1875725156269 · (a 178-bit prime).
+- At an addition, T = [k] B and Q = [q] B. For the additions of ±B, q = ±1. For the Frobenius additions of ψ(B) and -ψ^2(B), q = μ and -μ^2, where μ is the eigenvalue by which ψ acts on each prime part of the group.
+- T = Q needs an order of B that divides k - q, so a prime of r h that divides k - q. tests/test_g2_check.py finds none for any of the 23 additions, and the generator checks the same (`pairing.additions_avoid_q`) before it emits a program.
+- T = -Q makes the slope equation 0 = 2 yQ, which fails.
 
 ### No final exponentiation
 
-Computing f^h directly would take about 200 F_p12 squarings and products. The verifier uses a residue witness instead ([Novakovic and Eagen, 2024](https://eprint.iacr.org/2024/640)): the prover supplies c in F_p12 and a 27th root of unity w with
+Computing f^h directly would take about 200 F_p12 squarings and products. The verifier uses a residue witness instead ([Novakovic and Eagen, 2024](https://eprint.iacr.org/2024/640)): the prover supplies c in F_p12 and a 27th root of unity ω with
 
 ```
-f w = c^λ,   λ = 6x + 2 + p - p^2 + p^3
+f ω = c^Λ,   Λ = 6x + 2 + p - p^2 + p^3
 ```
 
-Since r divides λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (w e(α, β))^(-1). The program evaluates the Frobenius images at z by composition, π^n(a)(z) = a(t_n(z)), with Horner's rule, which needs the two or three constants of t_n instead of the 45 of the Frobenius matrices. As polynomials, these images have degree 70 for n = 1, 3, so the last Miller value is committed to keep this relation within the degree cap.
+Since r divides Λ and 27 divides h, this equation implies f^h = 1. The loop starts with f = c^(-1) and multiplies f by c or c^(-1) at each addition step, so that its squarings raise c to -(6x + 2). After the loop, one more relation checks f π(c^(-1)) π^2(c) π^3(c^(-1)) against (ω e(α, β))^(-1). The program evaluates the Frobenius images at z by composition, π^n(a)(z) = a(t_n(z)), with Horner's rule, which needs the two or three constants of t_n instead of the 45 of the Frobenius matrices. As polynomials, these images have degree 70 for n = 1, 3, so the last Miller value is committed to keep this relation within the degree cap.
 
 ### Miller values in the torus
 
-The relations are not about f itself but about u = E(f) = f^(p^6 - 1) = conj(f)/f, where conj, the Frobenius map π^6, sends w to -w. That is enough. E multiplies, commutes with π, and kills F_p6, so the residue check after E reads E(y) = c'^λ for the product y of everything above and c' = E(c). Then y^h = E(y)^((p^6 + 1)/r) = (c'^(p^6 + 1))^(λ/r) = 1, because c' lies in the torus T2 = {u : u conj(u) = 1}, a cyclic group of order p^6 + 1. Conversely, gcd(λ/r, (p^6 + 1)/r) = 1, so an honest y always has such a c', E of Novakovic and Eagen's c.
+The relations are not about f itself but about u = E(f) = f^(p^6 - 1) = conj(f)/f, where conj, the Frobenius map π^6, sends w to -w. That is enough. E multiplies, commutes with π, and kills F_p6, so the residue check after E reads E(y) = c'^Λ for the product y of everything above and c' = E(c). Then y^h = E(y)^((p^6 + 1)/r) = (c'^(p^6 + 1))^(Λ/r) = 1, because c' lies in the torus T2 = {u : u conj(u) = 1}, a cyclic group of order p^6 + 1. Conversely, gcd(Λ/r, (p^6 + 1)/r) = 1, so an honest y always has such a c', E of Novakovic and Eagen's c.
 
-The torus makes the witness smaller. Every element of T2 other than 1 is (a + w)/(a - w) for a single a in F_p6, a = w (u + 1)/(u - 1), and an element of F_p6 is a polynomial in w^2: 6 coefficients instead of 12. So the prover commits a for each committed value and a_c for c'. The inverse of c' is its conjugate, (a_c - w)/(a_c + w), so c^(-1) leaves the witness. And 3 does not divide p^6 + 1, so the 27th root of unity w has E(w) = 1: the two selector bits and the table of three constants go, and the end relation compares with one constant τ, E of the inverse of the constants (α, β)'s Miller value and the inputs' term contribute, compressed as well.
+The torus makes the witness smaller. Every element of T2 other than 1 is (a + w)/(a - w) for a single a in F_p6, a = w (u + 1)/(u - 1), and an element of F_p6 is a polynomial in w^2: 6 coefficients instead of 12. So the prover commits a for each committed value and a_c for c'. The inverse of c' is its conjugate, (a_c - w)/(a_c + w), so c^(-1) leaves the witness. And 3 does not divide p^6 + 1, so the 27th root of unity ω has E(ω) = 1: the two selector bits and the table of three constants go. The end relation compares with one constant τ, the inverse of E of the constant factors (the Miller value of (α, β), and the inputs' term's constant and offsets, below), compressed as well.
 
 The program keeps u as a fraction N/D of two polynomials:
 
@@ -176,9 +183,9 @@ Each input is cut into windows of 8 bits. For the digit d at bits 8j to 8j + 7 o
 
 The factors have order r, so they lie in the cyclotomic subgroup T6 of order p^4 - p^2 + 1, which needs fewer words than T2. Write u = (s + 1)/(s - 1) with s odd, s = b0 w + b1 w^3 + b2 w^5 for b_i in F_p2. Then u is in T6 exactly when b0 b2 - b1^2 = κ = 1/(3ξ), so b1 and b2, 4 words, fix the factor, and multiplying by b2 gives it without a division: (σ + b2)/(σ - b2) with σ = (κ + b1^2) w + b1 b2 w^3 + b2^2 w^5. A shared function evaluates σ ± b2 at z.
 
-The factors join the additions: an addition multiplies N and D by g_N and g_D already, and its windows' factors multiply them further, which raises that relation's degree by 17 or 8 per factor. The generator gives each addition as many windows as its relation has room for under the degree cap, the additions with the most room first: 7 additions, with 3 to 7 windows each, for one input. A factor multiplied in before k more doublings is squared k times by the loop, so its table holds the 2^k-th root of the factor, which exists in a group of odd order. The six top bits of the first input select the end's constant instead: τ is a table of 64 that also absorbs e(IC_0, γ), the offsets and (α, β).
+The factors join the additions: an addition multiplies N and D by g_N and g_D already, and its windows' factors multiply them further, which raises that relation's degree by 17 per factor. The generator gives each addition as many windows as its relation has room for under the degree cap, the additions with the most room first: 7 additions, with 3 to 7 windows each, for one input. A factor multiplied in before k more doublings is squared k times by the loop, so its table holds the 2^k-th root of the factor, which exists in a group of odd order. The six top bits of the first input select the end's constant instead: τ is a table of 64 that also absorbs e(IC_0, γ), the offsets and (α, β).
 
-For one input, this replaces the MSM in G1 (5.3 M mWU, 32 slopes in the witness) and γ's line constants (11.3 kB, and a line per step) with 31 table factors of 4 words. Each further input adds 32 windows with entries of 4 words where G1 needed 2, and more room in the relations, so with more than about five inputs the MSM in G1 would be lighter; the transaction-bound circuits have one. Each input adds about 6 M mWU and 14 kB to the pruned program (61.4 M mWU and 62 kB with three). With three or more, some additions carry ten or more windows, and the product of their factors is normalised partway, so that it stays within the bound of the field arithmetic. The program text grows by 2.6 MB per input, and its parse time with it: about 25 minutes for three inputs.
+For one input, this replaces the MSM in G1 (5.3 M mWU, 32 slopes in the witness) and γ's line constants (11.3 kB, and a line per step) with 31 table factors of 4 words. Each further input adds 32 windows with entries of 4 words where G1 needed 2, and more room in the relations, so with more than about five inputs the MSM in G1 would be lighter; the transaction-bound circuits have one. The second input adds 6.6 M mWU and the third 6.2 M, and each adds about 14 kB to the pruned program (61.4 M mWU and 62 kB with three). With three or more, some additions carry ten or more windows, and the product of their factors is normalised partway, so that it stays within the bound of the field arithmetic. The program text grows by 2.6 MB per input, and its parse time with it: about 25 minutes for three inputs.
 
 ### One identity, checked at one point
 
@@ -212,17 +219,17 @@ Since the program earns more budget than it costs, the transaction's weight is i
 
 ## Public input and transaction binding (core/curve.py, core/binding.py, groth16/verifier.py)
 
-The public inputs enter through the inputs' term of the pairing check (above): tables of constants of GT, selected by their bits. The inputs are checked to be below the group order. When the program is pruned for a spend, the table entries that were not selected disappear, so the tables cost nothing on chain: a window keeps its entry (128 bytes) and the commitments of the eight branches it did not take (32 bytes each). One public input takes 31 windows and the τ table, 12 kB in all, and costs about 5.7 M mWU; 8 bits is the width with the fewest bytes whose program text still parses in a few minutes.
+The public inputs enter through the inputs' term of the pairing check (above): tables of constants of GT, selected by their bits. The inputs are checked to be below the group order. When the program is pruned for a spend, the table entries that were not selected disappear, so the tables cost nothing on chain: a window keeps its entry (128 bytes) and the commitments of the eight branches it did not take (32 bytes each). One public input takes 31 windows and the τ table, 12 kB in all, and the public input's term costs 5.7 M mWU ([benchmarks.md](benchmarks.md)); 8 bits is the width with the fewest bytes whose program text still parses in a few minutes.
 
-To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, groth/core/binding.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 15 k mWU and the circuit about 59 k constraints per hashed node.
+To need only one, a circuit for this verifier exposes a single public signal: the SHA-256 Merkle root of its public values, with the sighash of the spending transaction as leaf 0 and the top three bits cleared so that it fits the field (circuits/public_merkle.circom, groth/core/binding.py). The witness carries the sibling hashes of leaf 0, and the program recomputes the root from its `sig_all_hash` jet, which hashes the transaction it runs in. A proof is therefore valid for exactly one transaction: it cannot be replayed or redirected, and no signature is needed. This costs the program about 14.5 k mWU at depth 1 (one sibling) and the circuit about 59 k constraints per hashed node.
 
-A circuit that cannot hash, such as a Noir circuit converted to R1CS (docs/noir.md), takes the sighash itself as its first public input instead, masked the same way, and `--sighash-input` makes the program compare it with the jet's: a tree with no siblings. It costs a public input (about 6.6 M mWU) instead of the circuit's hashes, and 253 bits of the sighash are as hard to match as the root's 253.
+A circuit that cannot hash, such as a Noir circuit converted to R1CS (docs/noir.md), takes the sighash itself as its first public input instead, masked the same way, and `--sighash-input` makes the program compare it with the jet's: a tree with no siblings. It costs a second public input (6.6 M mWU) instead of the circuit's hashes, and 253 bits of the sighash are as hard to match as the root's 253.
 
 A key compiled with `--unbound` has none of this. Its public inputs are whatever the spender proves, so the statement's constants must be fixed in the circuit, and a broadcast witness can be reused in any transaction to the same output. `tools/groth16_snarkjs.py` therefore binds unless `--unbound` is given, also for `PublicMerkleRoot(0)`, whose tree holds only the sighash.
 
 ## Budget
 
-The program costs 48.6 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 34 kB program and the 18 kB witness already earn about 52.7 M mWU: the verifier needs no padding, and the transaction weighs about 53 kWU. More public inputs keep it that way, since each one adds more bytes (its tables, about 14 kB) than cost (about 6.6 M mWU). `tests/test_groth16.py` checks that the budget covers the cost, and `deploy spend` reports it for a real transaction.
+The program costs 48.6 M mWU. Its budget is 1,000 mWU per byte of the input's witness stack, so the 34 kB program and the 18 kB witness already earn about 52.7 M mWU: the verifier needs no padding, and the transaction weighs about 53 kWU. More public inputs keep it that way, since each one adds more bytes (about 14 kB) than cost (6.2 to 6.6 M mWU). `tests/test_groth16.py` checks that the budget covers the cost, and `deploy spend` reports it for a real transaction.
 
 ## Spending (tools/harness)
 

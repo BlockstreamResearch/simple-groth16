@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The G1 multi-scalar multiplication of the fflonk verifier (groth/core/msm.py) against bn254.py.
 
-    python3 tests/test_msm.py [quick]
+    python3 tests/test_msm.py [quick]    # quick: without the 128-bit GLV MSM
 
 The group law on numbers and in hand; a wrong slope or inverse is rejected.  The variable-base MSM with
 8-bit columns (no GLV), then with the full 128-bit GLV columns of 4 points, and the fixed-base product

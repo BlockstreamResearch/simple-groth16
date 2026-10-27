@@ -2,7 +2,7 @@
 """On-curve checks, table lookups and the range check of an input (groth/core/curve.py) against bn254.py.
 Off-curve points, a wrong table entry and an input >= r must be rejected.
 
-    python3 tests/test_curve.py
+    python3 tests/test_curve.py    # SEED=3: the random points and words
 """
 
 import os

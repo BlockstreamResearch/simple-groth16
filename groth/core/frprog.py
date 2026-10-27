@@ -146,8 +146,8 @@ class FrDag:
     def emit(self, fr: Fp, outputs: Sequence[Node] = (), flatten: int = 6) -> Any:
         """The code: levels of values, each bound before the next level reads it; a check runs as soon as
         its arguments are bound.  Every `flatten` levels the live values are re-packed into a fresh
-        environment (chain's let), otherwise pushed in front of it.  Returns the unit-typed checks (Sym) and
-        the outputs' Vals are passed to `done`, which this returns: done(ctx, checks, outputs)."""
+        environment (chain's let), otherwise pushed in front of it.  Returns the steps for curve.chain; run()
+        chains them over the inputs and returns done(ctx, checks, the outputs' Vals)."""
         cv = Curve(fr)
         for n in self.nodes + self.checks:
             for a in n.args:

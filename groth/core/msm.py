@@ -21,7 +21,8 @@ odd n < 2^128 in absolute value is sum_j d_j 2^j with every digit d_j = 2 c_j - 
 of C = (n + 2^128 - 1) / 2: the prover gives C, one word per column.  Columns are grouped by four; a
 group's runtime table holds the 8 sums Q1 +- Q2 +- Q3 +- Q4, and the digits of step j select
 d_1 (Q1 + d_1 d_2 Q2 + d_1 d_3 Q3 + d_1 d_4 Q4): the entry by the bits c_1 xor c_k, the sign by c_1.  So
-the loop is 128 steps, each a doubling and one addition per group, with no digit 0 to skip.
+the loop is 128 steps, each one addition per group after a doubling (all but the first), with no digit 0
+to skip.
 
 The fixed-base part (FixedMsm): v G for a canonical word v (< r): windows of 8 bits (the top one 6),
 each selecting a constant (d + 1) 2^(8 j) G from a table by its digit (curve.select_const), starting from
@@ -361,7 +362,8 @@ def _xor1(be: Any, a: Any, b: Any) -> Any:
 
 class VarMsm:
     """sum_i k_i P_i over the program's backend, with the hints of var_witness.  `prefix` names the
-    witness nodes of the hints: <prefix>t<g>_<k> for the tables, <prefix>s<j>_<op> for the steps.  bits:
+    witness nodes of the hints: <prefix>t<g>_<k> for the tables, <prefix>s<j>d for step j's doubling
+    and <prefix>s<j>a<g> for its addition of group g.  bits:
     digits per column (128; tests use fewer)."""
 
     def __init__(self, fp: Fp, prefix: str = 'wv', bits: int = HALF_BITS) -> None:

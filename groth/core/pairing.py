@@ -9,12 +9,12 @@ of T2 other than 1 is (a + w) / (a - w) for one a in F_p6, a polynomial in w^2: 
 The prover writes a for the values after some of the steps (COMMIT) and for c', and each step becomes a
 few relations R(w) = 0 (mod M), with u kept as a fraction N / D:
 
-    doubling     N' = N^2 conj(L),  D' = D^2 L,           lambda y - 3/2 x^2
-    addition     N' = N g_N conj(L),  D' = D g_D L,       lambda (xQ - x) - (yQ - y)
+    doubling     N' = N^2 conj(l),  D' = D^2 l,           lambda y - 3/2 x^2
+    addition     N' = N g_N conj(l),  D' = D g_D l,       lambda (xQ - x) - (yQ - y)
     committed    N' (a - w) - D' (a + w),  then N, D = a + w, a - w
     at the end   x - x(-psi^3(B)),   y - y(-psi^3(B)),   u pi(c'^-1) pi^2(c') pi^3(c'^-1) - tau as a fraction
 
-L is the product of the lines at P = -A and C, and E(L) = conj(L) / L; a line is yP + o with o its odd
+l is the product of the lines at P = -A and C, and E(l) = conj(l) / l; a line is yP + o with o its odd
 part, so conj of it is yP - o.  g = E(c^-1) = (a_c - w) / (a_c + w) at A+, E(c) at A-; c^-1 is a
 conjugation.  N and D are never 0: a line's constant term yP is not, and a +- w is not, since w is not
 in F_p6.  T2 has order p^6 + 1, which 3 does not divide, so E(W27) = 1 and the residue's 27th root of
@@ -29,13 +29,14 @@ b0 b2 - b1^2 = kappa = 1 / (3 xi): b1 and b2 suffice, 4 words.  Scaled by b2, th
 (sigma + b2) / (sigma - b2) with sigma = (kappa + b1^2) w + b1 b2 w^3 + b2^2 w^5, and the additions
 multiply N and D by such factors (in g_N, g_D above), as many as each relation has room for under the
 degree cap; a factor multiplied in before k more doublings is the 2^k-th root of the one it stands for.
-The top window of the first input is merged with the end's constant: tau is a table of 64, by that
-window's digit, of E of the inverse of (alpha, beta)'s Miller value times K_0, the tables' offsets and
-the window's factor.
+The top window of the first input is merged with the end's constant: tau_d, one per digit d of that
+window (64), is E(f K_0 prod_i K_i^-offset_i K_1^((d + 1) 2^248))^-1, f the Miller value of (alpha, beta)
+and K_i the element of order r with K_i^h = e(IC_i, gamma) (gt_constants).
 
-If the relations hold, E(y) = c'^lambda for the Miller value y of the pairs times the inputs' term and
-the constant, and so y^h = E(y)^((p^6 + 1) / r) = (c'^(p^6 + 1))^(lambda / r) = 1.  Conversely
-gcd(lambda / r, (p^6 + 1) / r) = 1, so every honest y has such a c' (E of Novakovic and Eagen's c).
+If the relations hold, E(f) = c'^LAMBDA (bn254.LAMBDA = 6x + 2 + p - p^2 + p^3) for the product f of
+the pairs' Miller values, the inputs' term and the constant, and so f^h = E(f)^((p^6 + 1) / r) =
+(c'^(p^6 + 1))^(LAMBDA / r) = 1.  Conversely gcd(LAMBDA / r, (p^6 + 1) / r) = 1, so every honest f has
+such a c' (E of Novakovic and Eagen's c).
 
 Only B's slopes lambda are committed: x' = lambda^2 - 2x and y' = lambda (x - x') - y are polynomials in
 them.  A slope that satisfies its relation is the true one, so every step is the group law: y is never
@@ -45,16 +46,18 @@ if the order of B divides k - q, which tests/test_g2_check.py shows no order doe
 additions, q is an eigenvalue of psi).  After a step whose value is not committed, N and D are products
 of higher degree, which the next committed relation carries.
 
-The prover combines the relations with powers of a challenge r, S = sum r^k R_k, and supplies the
+The prover combines the relations with powers of a challenge rho (the witness word `r`), S = sum rho^k
+R_k, and supplies the
 quotient Q = S / M.  The program evaluates everything at one point z and checks S(z) = Q(z) M(z).  It
 multiplies only in F_p: an F_p12 product becomes one product of two evaluations.  D is N with w -> -w
 (up to sign), so a committed relation keeps only the even or only the odd part of N (a - w): its degree
 is 9 less than the product's (DegRing tracks both parts).
 
-Soundness.  r is the SHA-256 of the public inputs, the proof and everything committed, and z the
-SHA-256 of r and Q.  If some R_k is not 0 modulo M, S is not 0 modulo M except for at most 128 values of
-r; then S - Q M is a nonzero polynomial of degree at most max(deg S, n_Q + 11), n_Q the words of Q (171
-for one input, 227 for three), which vanishes at z with probability at most that degree over p.  The program gets r and z as witness words and compares them with the two
+Soundness.  rho is the SHA-256 of the public inputs, the proof and everything committed, and z the
+SHA-256 of rho and Q.  If some R_k is not 0 modulo M, S is not 0 modulo M except for at most 128 values
+of rho; then S - Q M is a nonzero polynomial of degree at most max(deg S, n_Q + 11), n_Q the words of Q
+(the bound is 171 for one input, 227 for three), which vanishes at z with probability at most that degree
+over p.  The program gets rho and z as witness words and compares them with the two
 hashes at the end.
 
 `relations` is written once over an abstract ring: the prover runs it on polynomials to get S and Q,
@@ -212,7 +215,7 @@ class DegRing:
 def relations(
     R: Ring, v: dict[str, Any], lines: Sequence[tuple[bn254.Fp2, bn254.Fp2]], commit: Sequence[bool] | None = None
 ) -> list[Any]:
-    """The relations R_k in order, over the ring R.  v: the values (Prover.witness); lines: fixed_lines of
+    """The relations R_k in order, over the ring R.  v: the values (Prover.witness(...)['values']); lines: fixed_lines of
     delta; commit: the steps whose Miller value is committed (COMMIT).  The values are u = E(f), kept as
     fractions N / D of polynomials; at a committed step u = (a + w) / (a - w), and N, D start again from
     a + w and a - w.  v['win'][i]: the compressed factors of the public inputs' term multiplied in at step
@@ -355,7 +358,9 @@ def schedule(cap: int) -> list[bool]:
     return commit
 
 
-DEG_CAP = 171  # two doublings and an addition, uncommitted but the last: 37 Miller values are committed
+# the degree of a committed relation that spans two uncommitted doublings and an addition (D D A); under
+# this cap, 37 of the 88 Miller values are committed
+DEG_CAP = 171
 COMMIT = schedule(DEG_CAP)
 N_RELS, DEG_S = _shape(COMMIT)  # 128 relations, degree 171
 
@@ -387,8 +392,8 @@ def windows(n: int) -> list[Window]:
 
 
 def add_capacities(cap: int) -> dict[int, int]:
-    """step -> the number of window factors its committed relation takes within the degree cap (a factor
-    adds 17 or 8 to the degree: the parity of the relation alternates)."""
+    """step -> the number of window factors its committed relation takes within the degree cap (each factor
+    adds 17 to the degree, and flips which parity part the relation keeps)."""
     j, rel = 0, {}
     for i, kind in enumerate(STEPS):
         j += 1  # its slope relation

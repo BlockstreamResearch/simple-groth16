@@ -8,8 +8,9 @@ E := examples/multiplier
 # a Noir circuit, bound by its first public input)
 HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm fflonk_keccak fflonk_sha256 noir
 # and the plain-Python ones: poly, invariants (what the generator refuses), tools (what the command-line
-# tools refuse), and bn254_ref, which checks the reference against py_ecc
-TESTS := $(HARNESS_TESTS) poly invariants tools
+# tools refuse), liquid (tools/liquid.py with its chain faked), and bn254_ref, which checks the reference
+# against py_ecc
+TESTS := $(HARNESS_TESTS) poly invariants tools liquid
 
 .PHONY: help harness test $(addprefix test-,$(TESTS)) test-bn254_ref bench example example-uprog fflonk-demo noir-demo lint fmt
 
@@ -39,7 +40,7 @@ test-inputs2: harness
 test-fflonk_keccak test-fflonk_sha256: test-fflonk_%: harness
 	$(PYTHON) tests/test_fflonk.py $*
 
-test-poly test-invariants test-tools test-bn254_ref: test-%:
+test-poly test-invariants test-tools test-liquid test-bn254_ref: test-%:
 	$(PYTHON) tests/test_$*.py
 
 bench: harness

@@ -24,7 +24,7 @@ fn main(sighash: pub Field, c: pub Field, a: Field, b: Field) {
 
 The circuit needs no constraint on the sighash. snarkjs's setup adds one row per public input, so each input's point in the key is independent, and changing an input invalidates the proof. The tests check this with a valid proof for another sighash, which the program rejects.
 
-The toy circuit has two public inputs (the sighash and c), where the circom one has one (the root). The second costs 6.6 M mWU and 14 kB of program.
+The toy circuit has two public inputs (the sighash and c), where the circom one has one (the root). The second costs 6.7 M mWU and 14 kB of program.
 
 ## What the tools check
 
@@ -59,9 +59,9 @@ The toy circuit `circuits/noir/multiplier`: 2 public inputs, 2 R1CS constraints.
 | | Noir, Groth16 | circom, Groth16 (for reference) |
 |---|---:|---:|
 | public inputs | 2 (sighash, c) | 1 (the root) |
-| program cost | 55.3 M mWU | 48.6 M mWU |
-| pruned program / witness | 47.9 / 19.2 kB | 34 / 18 kB |
-| transaction | 67.8 kWU, 17.0 kvB | 53.3 kWU, 13.3 kvB |
+| program cost | 54.3 M mWU | 47.7 M mWU |
+| pruned program / witness | 47.8 / 16.4 kB | 34 / 16 kB |
+| transaction | 64.9 kWU, 16.2 kvB | 50.7 kWU, 12.7 kvB |
 
 The program's bytes earn more budget than it costs, so it needs no padding.
 

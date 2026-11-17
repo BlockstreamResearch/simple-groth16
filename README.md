@@ -17,8 +17,8 @@ A Python generator compiles a snarkjs verification key into a Simplicity program
 | circom circuits | bound by a Merkle root of the public values | bound by the sighash as two public inputs |
 | Noir circuits ([docs](docs/noir.md)) | bound by the sighash as the first public input | should work, with the sighash as two inputs (untested) |
 | proofs | snarkjs `groth16` | snarkjs `fflonk` (Keccak-256 transcript), or `tools/snarkjs_sha256.mjs` (SHA-256 transcript) |
-| cost, toy circuit | 48.6 M mWU (circom), 55.3 M mWU (Noir) | 123.2 M mWU (SHA-256), 172.0 M mWU (Keccak), before padding |
-| spending transaction | 53.3 kWU (circom), 67.8 kWU (Noir) | 126.6 kWU (SHA-256), 185.3 kWU (Keccak) |
+| cost, toy circuit | 47.7 M mWU (circom), 54.3 M mWU (Noir) | 122.1 M mWU (SHA-256), 170.9 M mWU (Keccak), before padding |
+| spending transaction | 50.7 kWU (circom), 64.9 kWU (Noir) | 126.5 kWU (SHA-256), 186.8 kWU (Keccak) |
 | spent on | Elements regtest and Liquid testnet | Elements regtest and Liquid testnet |
 
 Every transaction fits under the 400 kWU standard limit. A spend's budget is 1,000 mWU per byte of the input's witness stack (the program and its witness), plus 50,000, and the Groth16 programs earn more budget than they cost. The fflonk program costs more, so its spends pad the witness to pay for it.
@@ -130,7 +130,7 @@ The proof binds the spending transaction, fee included, so the fee is fixed befo
 
 Nothing is sent without `--broadcast`. The transaction is printed, or written with `--out`. `deploy` executes it first, and refuses a transaction whose cost its budget does not cover, that needs more Bit Machine cells than consensus allows, or that is above the standard weight. With `--node`, testmempoolaccept checks it as well. `python3 tools/liquid.py --help` has every command, including `keyspend` and `broadcast`.
 
-Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 4,600 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
+Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 4,700 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
 
 > ⚠️ The toy statements are public: anyone can prove a·b = c for their own transaction. Once your funding transaction is seen, anyone can race you to the output. Fund a toy verifier on Liquid only with what you would give away. A verifier for your own circuit is as safe as that circuit's statement and setup.
 
@@ -177,6 +177,7 @@ A circuit that follows none of these conventions needs `--unbound`. Each of its 
 - The [perpetual powers of tau](https://github.com/privacy-scaling-explorations/perpetualpowersoftau) ceremony (Privacy & Scaling Explorations), whose files the demo's setups use.
 - Novakovic and Eagen, [On Proving Pairings](https://eprint.iacr.org/2024/640) (2024): the residue witness, and the relations combined into one quotient.
 - [Garaga](https://hackmd.io/@feltroidprime/B1eyHHXNT): randomized arithmetic in F_p12.
+- [groth16-fs-verifier](https://github.com/jmoik/groth16-fs-verifier) (jmoik): a Groth16 verifier in Bitcoin Script built on the same identity. Making the combination odd, so that half of the quotient's coefficients are zero and stay out of the witness, comes from there.
 - Gabizon and Williamson, [fflonk](https://eprint.iacr.org/2021/1167) (2021).
 - Gallant, Lambert and Vanstone (2001): the GLV decomposition in the fflonk MSM. Bajard, Didier and Kornerup, [RNS Montgomery multiplication](https://doi.org/10.1109/12.709376) (1998). Bertoni, Daemen, Peeters and Van Assche: Keccak.
 - [py_ecc](https://github.com/ethereum/py_ecc) (Ethereum Foundation): the cross-check of the reference code.

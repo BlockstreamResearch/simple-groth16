@@ -30,7 +30,7 @@ The verifier of `circuits/multiplier.circom`, the toy statement a·b = c, bound 
 |---|---|
 | `verification_key.json` | the snarkjs key |
 | `verifier.simpl.gz` | the generated program, 2.8 MB of text (most of it the public input's tables) |
-| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `bab3e5faa2f18478ca38eea1217dec723e58dab47589db3bd29b020aae222d55` |
+| `verifier.uprog` | its consensus encoding before pruning (`deploy compile`), CMR `5ff6dd550a1767593201035772aa2be6c4e407339b6fa09a3d80749cb0087f8d` |
 | `verifier.wnames` | the names of its witness nodes, in the order the encoding reads their values (`deploy compile`) |
 | `proof.json`, `public.json` | the snarkjs proof and its public signal |
 | `leaves.json` | the two leaves behind the public signal: the transaction's sighash and c |
@@ -40,7 +40,7 @@ The witness has three kinds of node:
 
 - `w_in` holds the public signal, the proof, the compressed residue witness, the challenges r and z, and the Merkle sibling.
 - `wl0` to `wl87` hold each step's slope, plus a compressed Miller value at 37 of the 88 steps.
-- `wq` holds the quotient.
+- `wq` holds the quotient: its 80 coefficients of odd degree, the others being zero.
 
 `make example` regenerates the program and the witness from the key, the proof, the public signal and the leaves, and compares them byte for byte. `make example-uprog` also runs `deploy compile` and compares the `.uprog` and `.wnames`. docs/benchmarks.md has the commands.
 

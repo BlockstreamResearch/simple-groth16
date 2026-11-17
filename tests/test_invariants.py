@@ -102,7 +102,7 @@ def main():
     v, _, c, _ = verify_nodes('a := comp unit jet_verify\nb := comp (case (drop a) iden) unit\nmain := b\n')
     assert v == {'a'} and v <= c  # and a check under a case is seen
     # bounds of the loop state that the step functions would exceed
-    for nm in ('N', 'D', 'acc', 'x', 'y', 'qz'):
+    for nm in (*PC.STATE, 'qz'):
         b = dict(PC.bounds())
         b[nm] = b[nm] * 9 // 10
         refused(lambda b=b: Groth16(F.Fp(Sym(0)), vk, b=b), f'the loop state {nm} exceeds its bound')

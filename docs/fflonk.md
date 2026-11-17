@@ -17,19 +17,19 @@ Measured in `hand` on the toy circuit `circuits/multiplier_fflonk.circom` (3 pub
 | transcript | 0.3 M | 49.1 M | |
 | opening (F_r) | 6.0 M | 6.0 M | |
 | MSM | 73.4 M | 73.4 M | |
-| pairing check | 42.9 M | 42.9 M | |
+| pairing check | 41.8 M | 41.8 M | |
 | binding | 0.1 M | 0.1 M | |
-| **cost before padding** | **123.2 M mWU** | **172.0 M mWU** | **48.6 M mWU** |
-| pruned program | 66 kB | 75 kB | 34 kB |
-| witness, before padding | 45 kB | 45 kB | 18 kB |
+| **cost before padding** | **122.1 M mWU** | **170.9 M mWU** | **47.7 M mWU** |
+| pruned program | 65 kB | 75 kB | 34 kB |
+| witness, before padding | 42 kB | 42 kB | 16 kB |
 
 The verifier costs more than its program and witness weigh, so a spend pads its witness (below). The Elements regtest spends of `tools/regtest.sh`:
 
 | | fflonk, SHA-256 | fflonk, Keccak | Groth16 |
 |---|---:|---:|---:|
-| padding | 30 blocks, 15.4 kB | 127 blocks, 65.0 kB | none |
-| cost with padding | 125.5 M mWU | 183.9 M mWU | 48.6 M mWU |
-| transaction | 126.6 kWU, 31.6 kvB | 185.3 kWU, 46.3 kvB | 53.3 kWU, 13.3 kvB |
+| padding | 35 blocks, 17.9 kB | 135 blocks, 69.1 kB | none |
+| cost with padding | 125.3 M mWU | 185.4 M mWU | 47.7 M mWU |
+| transaction | 126.5 kWU, 31.6 kvB | 186.8 kWU, 46.7 kvB | 50.7 kWU, 12.7 kvB |
 
 A padded transaction weighs about its cost, 1 WU per 1,000 mWU, under the 400 kWU standard limit in both modes.
 

@@ -25,11 +25,14 @@ Binding by the input (sighash_input): the circuit's first public input is the si
 three bits cleared like a root (binding.public_signal), and the program compares it with the jet's: a tree
 with no siblings.  The circuit needs no hash, for circuits that cannot compute SHA-256 soundly or cheaply
 (Noir's, converted to R1CS), and may have more public inputs, about 6 M mWU and 14 kB each.
+
+A public signal that has the same value in every proof (fix_inputs) is no verifier input: its term of L
+is a constant, which joins IC_0.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..core import bn254, pairing
@@ -43,6 +46,23 @@ from ..core.sym import E, Sym, Term, is_sym, words
 R = bn254.R
 VerifyingKey = dict[str, Any]  # alpha, beta, gamma, delta (bn254 points) and ic (a list of G1 points)
 Proof = tuple[bn254.G1Point, bn254.G2Point, bn254.G1Point]
+
+
+def fix_inputs(vk: VerifyingKey, fixed: Mapping[int, int]) -> VerifyingKey:
+    """The key of the same statement with some public signals fixed: `fixed` maps a signal's index (from
+    0, as snarkjs's public.json lists them) to its value.  L = IC_0 + sum a_i IC_i is linear in the
+    signals, so the term a_k IC_(k+1) of a fixed signal joins IC_0 and its point leaves the key.  A proof
+    verifies under the new key, with the other signals, exactly when it verifies under vk with all of
+    them, the fixed ones having these values."""
+    n = len(vk['ic']) - 1
+    ensure(all(0 <= k < n for k in fixed), 'a fixed signal: the key has no such public signal')
+    ensure(all(0 <= v < R for v in fixed.values()), 'a fixed signal: its value is not below r')
+    ic0 = vk['ic'][0]
+    for k, v in fixed.items():
+        ic0 = bn254.g1_add(ic0, bn254.g1_mul(vk['ic'][k + 1], v))
+    # an honest key meets this with negligible probability; the inputs' term needs a point for IC_0
+    ensure(ic0 is not None, 'the fixed signals send IC_0 to the point at infinity')
+    return {**vk, 'ic': [ic0] + [pt for k, pt in enumerate(vk['ic'][1:]) if k not in fixed]}
 
 
 class Groth16:

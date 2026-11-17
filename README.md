@@ -148,6 +148,8 @@ All the tools live in `tools/`, and every command takes `--out build/x`. For the
 
 The program checks only the binding input. The spender chooses every other public input, and each one is published in the spend. So the circuit must fix the statement's constants itself: the program does not pin them. In the Merkle binding the program sees only the root, not the values behind it.
 
+With Groth16, the program can pin a public signal instead: `--fix K=VALUE`, on `program` and on `witness`, makes signal K (counted from 0, as `public.json` lists them) equal to VALUE in every proof the program accepts. The signal is compiled into the key, so it is no verifier input and costs nothing. This suits signals that are constants of a deployment, such as the hash of the program a wrapper circuit proves. The binding then applies to the signals that are left ([docs/groth16.md](docs/groth16.md)).
+
 A circuit that follows none of these conventions needs `--unbound`. Each of its public signals is then a verifier input; with Groth16, each costs about 6 M mWU and 12 to 14 kB. Nothing binds the proof to the transaction: anyone who sees the spend can reuse its witness in another transaction to the same output.
 
 ## Repository

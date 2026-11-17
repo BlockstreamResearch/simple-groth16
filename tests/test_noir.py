@@ -16,8 +16,9 @@ output while exiting 0.
 
 The proofs are of circuits/noir/multiplier (a = 3, b = 7, c = 21), made by `tools/demo.py
 --frontend noir` for the harness's dummy sighash and for another one.  The program must accept the
-first at the predicted cost, within its budget, and reject the second, and a wrong c.  `quick` skips the
-program.
+first at the predicted cost, within its budget, and reject the second, and a wrong c.  With c fixed in
+the key (fix_inputs, the tool's --fix 1=21) the sighash is the only input left: that program must accept
+the first proof and reject the second as well.  `quick` skips the programs.
 """
 
 import json
@@ -38,7 +39,7 @@ from groth.core import fp as F
 from groth.core import pairing as PC
 from groth.core.budget import budget_ok
 from groth.core.sym import Num
-from groth.groth16 import Groth16
+from groth.groth16 import Groth16, fix_inputs
 
 EX = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'examples', 'noir')
 DUMMY_SIGHASH = bytes.fromhex('9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a')
@@ -204,6 +205,20 @@ def program():
     other = g.witness(*proofs['other'])  # a valid proof, for another transaction
     assert other is not None
     wrong_c = dict(wit, scalars=[inputs[0], 22])
+    # c fixed in the key: one input, the sighash
+    folded = fix_inputs(vk, {1: 21})
+    gf = Groth16(F.Fp(Num()), folded, b=bnd, sighash_input=True)
+    wit_f = gf.witness(proof, inputs[:1], sighash)
+    assert wit_f is not None and gf.witness(proof, inputs[:1], OTHER_SIGHASH) is None
+    gf.verify(gf.num_input(wit_f))
+    other_f = gf.witness(proofs['other'][0], proofs['other'][1][:1], OTHER_SIGHASH)
+    assert other_f is not None
+    assert (
+        Groth16(F.Fp(Num()), fix_inputs(vk, {1: 22}), b=bnd, sighash_input=True).witness(
+            *proofs['this'][:1], inputs[:1], sighash
+        )
+        is None
+    )
     if QUICK:
         print('numeric model ok')
         return
@@ -222,6 +237,17 @@ def program():
         f'Noir verifier (2 public inputs, bound by the first): cost {r["cost"]:,} mWU, binding '
         f'{g.parts["binding"]:,} mWU, program {r["program_bytes"]:,} B, witness {r["witness_bytes"]:,} B '
         f'({time.time() - t0:.0f}s)'
+    )
+    t0 = time.time()
+    text, gf, estimate = Groth16.compile(folded, sighash_input=True, b=bnd)
+    results = harness.run('noir_fixed', text, gf.witness_value(wit_f), multi=[gf.witness_value(other_f)], timeout=7200)
+    r = harness.expect_ok(results[0], 'noir, c fixed')
+    assert r['cost'] == estimate, (r['cost'], estimate)
+    assert budget_ok(r['cost'], r['program_bytes'], r['witness_bytes']), r
+    harness.expect_rejected(results[1], 'another sighash, c fixed')
+    print(
+        f'with c fixed in the key (1 public input): cost {r["cost"]:,} mWU, program {r["program_bytes"]:,} B, '
+        f'witness {r["witness_bytes"]:,} B; another sighash rejected ({time.time() - t0:.0f}s)'
     )
 
 

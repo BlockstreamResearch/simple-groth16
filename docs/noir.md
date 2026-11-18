@@ -65,7 +65,7 @@ The toy circuit `circuits/noir/multiplier`: 2 public inputs, 2 R1CS constraints.
 
 The program's bytes earn more budget than it costs, so it needs no padding.
 
-If c is the same for every spend, it can be fixed in the program instead of being an input: `groth16_snarkjs.py program vk.json --sighash-input --fix 1=21` compiles c = 21 into the key (signal 1, counted from 0), and `witness` takes the same `--fix`. The sighash is then the only verifier input, which saves the second input's cost and bytes, and the program accepts no proof for another c. `tests/test_noir.py` runs that program on the proofs in `examples/noir`.
+If c is the same for every spend, it can be fixed in the program instead of being an input: `groth16_snarkjs.py program vk.json --sighash-input --fix 1=21` compiles c = 21 into the key (signal 1, counted from 0), and `witness` takes the same `--fix`. The sighash is then the only verifier input, which saves the second input's cost and bytes (47.7 M mWU and a 34 kB program, as for the circom circuit), and the program accepts no proof for another c. `tests/test_noir.py` runs that program on the proofs in `examples/noir`.
 
 ## Using it
 
@@ -77,7 +77,7 @@ tools/harness/target/release/deploy compile build/noir/verifier.simpl build/noir
 tools/regtest.sh build/noir
 ```
 
-`setup` compiles and converts the circuit, runs the Groth16 setup with one contribution, and writes the program. `deploy compile` parses the program's 5.4 MB of text in about 10 minutes. `prove` (which `regtest.sh` calls) makes the circuit's witness, the proof and the program's witness. `make noir-demo` runs setup and prove without a node. On Liquid testnet or Liquid, `tools/liquid.py` spends the verifier (README).
+`setup` compiles and converts the circuit, runs the Groth16 setup with one contribution, and writes the program. `deploy compile` parses the program's 5.4 MB of text in 8 to 10 minutes. `prove` (which `regtest.sh` calls) makes the circuit's witness, the proof and the program's witness. `make noir-demo` runs setup and prove without a node. On Liquid testnet or Liquid, `tools/liquid.py` spends the verifier (README).
 
 For your own circuit, declare its public parameters before any private one, the sighash first, and return nothing. Then:
 

@@ -490,6 +490,13 @@ def var_nodes(w: dict[str, Any], prefix: str = 'wv') -> dict[str, WSpec]:
 # pruned, and leaves only its commitment.  A block is 16 words checked to be 0, which also fixes the
 # block's type (a witness value whose type nothing constrains would not survive decoding).  wpsel's 16
 # bits are all read: bits 0 .. 8 select the groups, bits 9 .. 15 must be 0.
+#
+# The words are checked where they lie.  A group is a balanced tree of words, so its lowest nodes are
+# pairs of words, and PADW checks one pair with three jets applied in place: the two words are equal
+# (eq_256), and the first is 0 modulo p_s and modulo n_s (fe_is_zero, scalar_is_zero), hence 0: p_s and
+# n_s are the only other words either jet accepts.  A larger tree is checked by the function of its two
+# halves, under take and drop.  Nothing is copied on the way down, so a block costs the same in every
+# group: 23.5 k mWU for its checks and 8.2 k for reading its witness node.
 PAD_GROUPS = 9
 PAD_BLOCK = 512  # bytes
 
@@ -519,14 +526,21 @@ class Padding:
     def __init__(self, be: Any) -> None:
         self.be = be
 
-        def halves(prev: E) -> Any:
-            return lambda a: be.checks([be.call(prev, [be.subtree(a[0])]), be.call(prev, [be.subtree(a[1])])])
+        def pair(_: Any) -> E:  # (w0, w1): w0 = w1, and w0 = 0 mod p_s and mod n_s
+            jets = [be.jet_at('eq_256', '', 1), be.jet_at('fe_is_zero', 'O', 1), be.jet_at('scalar_is_zero', 'O', 1)]
+            return be.checks([be.verify(j) for j in jets])
 
-        fns = [be.function('PAD0', words(16), lambda a: be.checks([be.verify(be.eq256(w, be.word(0))) for w in a]))]
-        shape: Any = words(16)
-        for k in range(1, PAD_GROUPS):
+        def halves(prev: E) -> Any:
+            return lambda _: be.checks([be.take(prev), be.drop(prev)])
+
+        fn = be.function('PADW', words(2), pair)
+        shape: Any = words(2)
+        fns = []
+        for n in (4, 8) + tuple(16 << k for k in range(PAD_GROUPS)):  # words: 4, 8, then the groups
             shape = [shape, shape]
-            fns.append(be.function(f'PAD{k}', shape, halves(fns[-1])))
+            fn = be.function(f'PAD{(n // 16).bit_length() - 1}' if n >= 16 else f'PADW{n}', shape, halves(fn))
+            if n >= 16:
+                fns.append(fn)
         self.fns = fns
         self.group_cost: list[int] = []
 

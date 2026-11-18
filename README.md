@@ -18,7 +18,7 @@ A Python generator compiles a snarkjs verification key into a Simplicity program
 | Noir circuits ([docs](docs/noir.md)) | bound by the sighash as the first public input | should work, with the sighash as two inputs (untested) |
 | proofs | snarkjs `groth16` | snarkjs `fflonk` (Keccak-256 transcript), or `tools/snarkjs_sha256.mjs` (SHA-256 transcript) |
 | cost, toy circuit | 47.7 M mWU (circom), 54.3 M mWU (Noir) | 122.1 M mWU (SHA-256), 170.9 M mWU (Keccak), before padding |
-| spending transaction | 50.7 kWU (circom), 64.9 kWU (Noir) | 126.5 kWU (SHA-256), 186.8 kWU (Keccak) |
+| spending transaction | 50.7 kWU (circom), 64.9 kWU (Noir) | 124.2 kWU (SHA-256), 175.3 kWU (Keccak) |
 | spent on | Elements regtest and Liquid testnet | Elements regtest and Liquid testnet |
 
 Every transaction fits under the 400 kWU standard limit. A spend's budget is 1,000 mWU per byte of the input's witness stack (the program and its witness), plus 50,000, and the Groth16 programs earn more budget than they cost. The fflonk program costs more, so its spends pad the witness to pay for it.
@@ -73,7 +73,7 @@ Each test generates programs for one layer and runs them through `hand`, which e
    $D compile build/multiplier/verifier.simpl build/multiplier/verifier
    ```
 
-   `setup` takes about two minutes. It compiles the circuit, downloads a powers-of-tau file and checks it against a pinned digest, runs the snarkjs setup, and writes `verifier.simpl`. `deploy compile` takes about three minutes. It parses the program once and writes `verifier.uprog`, its consensus encoding, and `verifier.wnames`, the order of its witness nodes.
+   `setup` takes about two minutes. It compiles the circuit, downloads a powers-of-tau file and checks it against a pinned digest, runs the snarkjs setup, and writes `verifier.simpl`. `deploy compile` takes two to three minutes. It parses the program once and writes `verifier.uprog`, its consensus encoding, and `verifier.wnames`, the order of its witness nodes.
 
 2. On a node set up as `tools/regtest.sh` describes, get the address and fund it:
 
@@ -130,7 +130,7 @@ The proof binds the spending transaction, fee included, so the fee is fixed befo
 
 Nothing is sent without `--broadcast`. The transaction is printed, or written with `--out`. `deploy` executes it first, and refuses a transaction whose cost its budget does not cover, that needs more Bit Machine cells than consensus allows, or that is above the standard weight. With `--node`, testmempoolaccept checks it as well. `python3 tools/liquid.py --help` has every command, including `keyspend` and `broadcast`.
 
-Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 4,700 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
+Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 4,400 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
 
 > ⚠️ The toy statements are public: anyone can prove a·b = c for their own transaction. Once your funding transaction is seen, anyone can race you to the output. Fund a toy verifier on Liquid only with what you would give away. A verifier for your own circuit is as safe as that circuit's statement and setup.
 

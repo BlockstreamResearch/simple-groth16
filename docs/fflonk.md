@@ -27,9 +27,9 @@ The verifier costs more than its program and witness weigh, so a spend pads its 
 
 | | fflonk, SHA-256 | fflonk, Keccak | Groth16 |
 |---|---:|---:|---:|
-| padding | 35 blocks, 17.9 kB | 135 blocks, 69.1 kB | none |
-| cost with padding | 125.3 M mWU | 185.4 M mWU | 47.7 M mWU |
-| transaction | 126.5 kWU, 31.6 kvB | 186.8 kWU, 46.7 kvB | 50.7 kWU, 12.7 kvB |
+| padding | 31 blocks, 15.9 kB | 113 blocks, 57.9 kB | none |
+| cost with padding | 123.1 M mWU | 174.5 M mWU | 47.7 M mWU |
+| transaction | 124.2 kWU, 31.1 kvB | 175.3 kWU, 43.8 kvB | 50.7 kWU, 12.7 kvB |
 
 A padded transaction weighs about its cost, 1 WU per 1,000 mWU, under the 400 kWU standard limit in both modes.
 
@@ -109,9 +109,11 @@ A version for two fixed G2 points would save B's slope relations, about 15 M.
 
 ### Padding
 
-The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. The verifier costs more than its program and witness weigh, so a spend adds zero blocks of 512 bytes to the witness. A block costs 0.05 to 0.12 M mWU to check, depending on its group, and earns 0.51 M.
+The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. The verifier costs more than its program and witness weigh, so a spend adds zero blocks of 512 bytes to the witness. A block earns 0.51 M mWU and costs 0.03 M: 8 k to read its witness node, and 23 k to check that its 16 words are zero.
 
-How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size (about 6 minutes), with no group taken and, since `hand`'s dummy sighash is not the transaction's, without the binding. The groups and the binding add their code, so the real program is larger and earns more budget than predicted: the estimate errs on the safe side.
+The check runs where the words lie. A block is a balanced tree of words, so its lowest nodes are pairs of words, and each pair takes three jets applied in place: `eq_256` for the two words being equal, and `fe_is_zero` and `scalar_is_zero` for the first one being zero modulo each of the secp256k1 primes. A word below 2^256 that both primes divide is 0, so the pair is zero, and nothing is copied or compared with a constant. A larger tree is checked by the function of its two halves, so a block costs the same whatever the size of its group.
+
+How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size (about 5 minutes), with no group taken and, since `hand`'s dummy sighash is not the transaction's, without the binding. The groups and the binding add their code, so the real program is larger and earns more budget than predicted: the estimate errs on the safe side.
 
 ## Soundness
 

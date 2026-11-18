@@ -9,7 +9,12 @@
         proof.json, public.json and the verifier's witness verifier.w0.json (and leaves.json for the
         circom Groth16 circuit)
 
-`setup` records the frontend, the protocol and the transcript in demo.json, which `prove` reads.  The
+`setup --signal-bits N` (Groth16) cuts the bound signal to its low N bits, for a lighter verifier with
+less margin (tools/groth16_snarkjs.py --signal-bits): the circom circuit is compiled with that width, and
+the Noir one is given the sighash cut to it.
+
+`setup` records the frontend, the protocol, the transcript and the signal's bits in demo.json, which
+`prove` reads.  The
 circuits bind the transaction three ways: the circom one for Groth16 by the Merkle root of its public
 values, the fflonk one by its first two public inputs (the sighash as two limbs), and the Noir one by its
 first public input (the sighash with its top three bits cleared: the Groth16 tool's --sighash-input).
@@ -133,14 +138,32 @@ def check_tools(frontend='circom'):
         )
 
 
-def inputs_json(path, a, b, sighash, frontend):
-    """The circuit's inputs by name: the sighash as two limbs (circom), or as one signal (Noir); returns c."""
+def inputs_json(path, a, b, sighash, frontend, bits=binding.SIGNAL_BITS):
+    """The circuit's inputs by name: the sighash as two limbs (circom), or as one signal of `bits` bits
+    (Noir); returns c."""
     c = a * b % bn254.R
     limbs = [str(v) for v in binding.sighash_limbs(sighash)]
-    sig = str(binding.public_signal(sighash)) if frontend == 'noir' else limbs
+    sig = str(binding.public_signal(sighash, bits)) if frontend == 'noir' else limbs
     with open(path, 'w') as f:
         json.dump({'a': str(a), 'b': str(b), 'c': str(c), 'sighash': sig}, f)
     return c
+
+
+def circom_source(out, name, bits):
+    """The circom circuit to compile: circuits/<name>.circom, or, for a signal of another width, a copy in
+    `out` whose main component has that width."""
+    src = os.path.join(ROOT, 'circuits', f'{name}.circom')
+    if bits == binding.SIGNAL_BITS:
+        return src
+    with open(src) as f:
+        text = f.read()
+    main = f'component main = Multiplier({binding.SIGNAL_BITS});'
+    if text.count(main) != 1:
+        sys.exit(f'{src} has no `{main}` to change the signal width of')
+    path = os.path.join(out, f'{name}.circom')
+    with open(path, 'w') as f:
+        f.write(text.replace(main, f'component main = Multiplier({bits});'))
+    return path
 
 
 def noir_r1cs(*args):
@@ -150,6 +173,9 @@ def noir_r1cs(*args):
 def setup(a):
     if a.frontend == 'noir' and a.protocol != 'groth16':
         sys.exit('the Noir circuit is for Groth16 (fflonk binds by two sighash limbs: see docs/noir.md)')
+    bits = a.signal_bits
+    if bits != binding.SIGNAL_BITS and (a.protocol != 'groth16' or bits % 8 or not binding.MIN_BITS <= bits <= 248):
+        sys.exit(f'--signal-bits is for Groth16: a multiple of 8 from {binding.MIN_BITS} to 248')
     check_tools(a.frontend)
     out = a.out
     name = 'multiplier' if a.frontend == 'noir' else CIRCUITS[a.protocol]
@@ -162,13 +188,15 @@ def setup(a):
         run(
             [
                 CIRCOM,
-                os.path.join(ROOT, 'circuits', f'{name}.circom'),
+                circom_source(out, name, bits),
                 '--r1cs',
                 '--wasm',
                 '-o',
                 out,
                 '-l',
                 NODE_MODULES,
+                '-l',
+                os.path.join(ROOT, 'circuits'),
             ]
         )
     r1cs, zkey0, zkey = (os.path.join(out, f) for f in (f'{name}.r1cs', f'{name}_0000.zkey', f'{name}.zkey'))
@@ -181,13 +209,15 @@ def setup(a):
         # check that the key comes from the circuit and the checked powers of tau; prints the contribution hash
         snarkjs('zkey', 'verify', r1cs, pot, zkey)
         bind = ['--sighash-input'] if a.frontend == 'noir' else ['--values', str(VALUES)]
+        bind += ['--signal-bits', str(bits)] if bits != binding.SIGNAL_BITS else []
         tool = ['groth16_snarkjs.py', 'program', vk] + bind
     else:  # universal: the key comes from the powers of tau alone, with no contribution of its own
         snarkjs('fflonk', 'setup', r1cs, pot, zkey)
         tool = ['fflonk_snarkjs.py', 'program', vk, '--transcript', a.transcript, '--bind']
     snarkjs('zkey', 'export', 'verificationkey', zkey, vk)
     with open(os.path.join(out, 'demo.json'), 'w') as f:
-        json.dump({'frontend': a.frontend, 'protocol': a.protocol, 'transcript': a.transcript}, f)
+        demo = {'frontend': a.frontend, 'protocol': a.protocol, 'transcript': a.transcript, 'signal_bits': bits}
+        json.dump(demo, f)
     run([sys.executable, os.path.join(ROOT, 'tools', tool[0])] + tool[1:] + ['--out', os.path.join(out, 'verifier')])
 
 
@@ -196,13 +226,15 @@ def prove(a):
     with open(os.path.join(out, 'demo.json')) as f:
         demo = json.load(f)
     frontend, protocol, transcript = demo.get('frontend', 'circom'), demo['protocol'], demo['transcript']
+    bits = demo.get('signal_bits', binding.SIGNAL_BITS)
+    width = ['--signal-bits', str(bits)] if bits != binding.SIGNAL_BITS else []
     check_tools(frontend)
     name = 'multiplier' if frontend == 'noir' else CIRCUITS[protocol]
     by_root = frontend == 'circom' and protocol == 'groth16'  # bound by the Merkle root, not by the inputs
     a.a, a.b = a.a % bn254.R, a.b % bn254.R  # the circuit's field is the BN254 scalar field
     sighash = bytes.fromhex(a.sighash)
     limbs = binding.sighash_limbs(sighash)
-    c = inputs_json(os.path.join(out, 'input.json'), a.a, a.b, sighash, frontend)
+    c = inputs_json(os.path.join(out, 'input.json'), a.a, a.b, sighash, frontend, bits)
     print(f'a = {a.a}\nb = {a.b}\nc = a b mod r = {c}')
     if by_root:
         with open(os.path.join(out, 'leaves.json'), 'w') as f:
@@ -231,15 +263,20 @@ def prove(a):
     with open(public) as f:
         signals = [int(v) for v in json.load(f)]
     if by_root:
-        if signals[0] != binding.public_signal(binding.root([sighash, c])):
+        if signals[0] != binding.public_signal(binding.root([sighash, c]), bits):
             sys.exit('the circuit and groth/core/binding.py disagree on the root')
-        print(f'the public signal is the Merkle root of the sighash and c = {c}, as groth/core/binding.py computes it')
+        print(
+            f'the public signal is the Merkle root of the sighash and c = {c} (its low {bits} bits), '
+            'as groth/core/binding.py computes it'
+        )
         tool = ['groth16_snarkjs.py', 'witness', vk, proof, public, '--leaves', os.path.join(out, 'leaves.json')]
+        tool += width
     elif frontend == 'noir':
-        if signals != [binding.public_signal(sighash), c]:
+        if signals != [binding.public_signal(sighash, bits), c]:
             sys.exit(f'the public signals are not the sighash and c: {signals}')
-        print(f'the public signals are the sighash (its low 253 bits) and c = {c}')
+        print(f'the public signals are the sighash (its low {bits} bits) and c = {c}')
         tool = ['groth16_snarkjs.py', 'witness', vk, proof, public, '--sighash-input', '--sighash', a.sighash]
+        tool += width
     else:
         if signals != limbs + [c]:
             sys.exit(f'the public signals are not the sighash limbs and c: {signals}')
@@ -258,6 +295,13 @@ def main():
     ap.add_argument('--frontend', choices=['circom', 'noir'], default='circom', help='setup: the circuit language')
     ap.add_argument('--protocol', choices=sorted(CIRCUITS), default='groth16', help='setup: the proof system')
     ap.add_argument('--transcript', choices=['keccak', 'sha256'], default='keccak', help='setup: fflonk transcript')
+    ap.add_argument(
+        '--signal-bits',
+        type=int,
+        default=binding.SIGNAL_BITS,
+        metavar='N',
+        help='setup, Groth16: the bound signal is cut to N bits, 184 to 248 in bytes (default: 253)',
+    )
     a = ap.parse_args()
     if a.command == 'setup':
         setup(a)

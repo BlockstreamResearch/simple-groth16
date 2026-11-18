@@ -28,6 +28,10 @@ with no siblings.  The circuit needs no hash, for circuits that cannot compute S
 
 A public signal that has the same value in every proof (fix_inputs) is no verifier input: its term of L
 is a constant, which joins IC_0.
+
+The bound signal may be shorter than 253 bits (signal_bits, binding.py): the circuit then exposes the low
+bits of the root, or of the sighash, the tables cover those bits only, and the binding, which compares the
+whole input word, also shows that the input has no bit above them.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..core import bn254, pairing
-from ..core.binding import bound_signal, leaf, root_check
+from ..core.binding import SIGNAL_BITS, bound_signal, check_bits, leaf, root_check
 from ..core.curve import Curve
 from ..core.dsl import CheckFailed, Tbalanced, WSpec, balanced_paths, ensure, wbalanced, wpair, wv
 from ..core.fp import Fp, Val
@@ -68,7 +72,8 @@ def fix_inputs(vk: VerifyingKey, fixed: Mapping[int, int]) -> VerifyingKey:
 class Groth16:
     """Generator of the verifier of vk = dict(alpha, beta, gamma, delta, ic) (bn254 points).  b:
     pairing.bounds(); depth: depth of the public-signal Merkle tree; sighash_input: the first public input
-    is the sighash instead (depth 0 and no sighash_input: no transaction binding)."""
+    is the sighash instead (depth 0 and no sighash_input: no transaction binding); signal_bits: the bits of
+    the bound signal, the first input (binding.check_bits)."""
 
     def __init__(
         self,
@@ -77,20 +82,28 @@ class Groth16:
         b: dict[str, int] | None = None,
         depth: int = 0,
         sighash_input: bool = False,
+        signal_bits: int = SIGNAL_BITS,
     ) -> None:
         self.fp, self.be = fp, fp.be
         self.cv = Curve(fp)
         self.vk, self.depth, self.sighash_input = vk, depth, sighash_input
+        self.signal_bits = check_bits(signal_bits)
         self.n = len(vk['ic']) - 1
         ensure(self.n >= 1, 'the key has no public input')
         ensure(depth >= 0 and (depth == 0 or self.n == 1), 'a bound circuit has one public signal')
         ensure(not (sighash_input and depth), 'one binding: by the tree or by the input')
+        # the tables of a shorter signal read its bits only: the binding is what shows the rest to be 0
+        ensure(signal_bits == SIGNAL_BITS or depth or sighash_input, 'a shorter signal needs a binding')
+        bits = [pairing.INPUT_BITS] * self.n
+        if signal_bits != SIGNAL_BITS:
+            bits[0] = signal_bits
         self.pc = PairingCheck(
             fp,
             vk['delta'],
             bn254.multi_miller_loop_affine([(vk['alpha'], vk['beta'])]),
             pairing.gt_constants(vk['ic'], vk['gamma']),
             b,
+            bits,
         )
 
     # prover side
@@ -116,13 +129,13 @@ class Groth16:
                 raise CheckFailed('the sighash and its siblings')
             wit['sighash'] = int.from_bytes(leaf(sighash), 'big')
             wit['siblings'] = [int.from_bytes(leaf(x), 'big') for x in siblings]
-            if bound_signal(wit['sighash'], wit['siblings']) != inputs[0]:
+            if bound_signal(wit['sighash'], wit['siblings'], self.signal_bits) != inputs[0]:
                 return None
         elif self.sighash_input:
             if sighash is None:
                 raise CheckFailed('the sighash')
             wit['sighash'] = int.from_bytes(leaf(sighash), 'big')
-            if bound_signal(wit['sighash'], []) != inputs[0]:
+            if bound_signal(wit['sighash'], [], self.signal_bits) != inputs[0]:
                 return None
         return wit
 
@@ -197,9 +210,9 @@ class Groth16:
         be = self.be
         if not is_sym(be):
             sighash, sibs = siblings
-            ensure(bound_signal(sighash, sibs) == a1, 'transaction binding failed')
+            ensure(bound_signal(sighash, sibs, self.signal_bits) == a1, 'transaction binding failed')
             return 0
-        out = root_check(be, a1, siblings)
+        out = root_check(be, a1, siblings, self.signal_bits)
         self.parts['binding'] = out.c
         return out
 
@@ -210,11 +223,16 @@ class Groth16:
 
     @classmethod
     def compile(
-        cls, vk: VerifyingKey, depth: int = 0, b: dict[str, int] | None = None, sighash_input: bool = False
+        cls,
+        vk: VerifyingKey,
+        depth: int = 0,
+        b: dict[str, int] | None = None,
+        sighash_input: bool = False,
+        signal_bits: int = SIGNAL_BITS,
     ) -> tuple[str, Groth16, int]:
         """The verifier of a key: (program text, its generator, cost bound in mWU)."""
         be = Sym(0)
-        g = cls(Fp(be), vk, b=b or pairing.bounds(), depth=depth, sighash_input=sighash_input)
+        g = cls(Fp(be), vk, b=b or pairing.bounds(), depth=depth, sighash_input=sighash_input, signal_bits=signal_bits)
         body = g.program()
         be.em.define('w_in', 'witness', f'_ -> {g.witness_type()}')
         be.em.define('main', f'comp w_in ({body.t})')

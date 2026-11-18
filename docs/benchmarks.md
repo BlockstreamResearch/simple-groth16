@@ -8,26 +8,26 @@ The toy circuit's verifier (one public signal bound to the transaction), in one 
 
 | | |
 |---|---|
-| program cost | 48,646,805 mWU |
-| budget: (witness stack bytes + 50) x 1000 | 52,699,000 mWU, no padding needed |
-| pruned program | 34,147 bytes |
-| witness (proof, 37 compressed Miller values, slopes, quotient, Merkle sibling) | 18,432 bytes |
-| transaction | 53,308 WU, 13,327 vB |
+| program cost | 47,656,163 mWU |
+| budget: (witness stack bytes + 50) x 1000 | 50,121,000 mWU, no padding needed |
+| pruned program | 34,125 bytes |
+| witness (proof, 37 compressed Miller values, slopes, quotient, Merkle sibling) | 15,872 bytes |
+| transaction | 50,726 WU, 12,682 vB |
 | fee at 0.115 sat/vB | about 1,500 sat |
 
 ## Where the cost goes
 
 | part | mWU | share |
 |---|---:|---:|
-| the loop: 88 steps, each a few relations at z | 38,188,706 | 78.5% |
-| the public input's term: 31 table factors, at 7 of the additions | 5,664,636 | 11.6% |
-| end: the last relations, Q(z) (160 coefficients), the two hashes | 2,676,830 | 5.5% |
-| setup: on-curve checks, powers of z, a_c at z, the Frobenius images, τ, the transcript header | 2,061,315 | 4.2% |
-| reading the witness, passing it between the parts | 29,822 | 0.1% |
-| transaction binding, range check | 25,496 | 0.0% |
-| total | 48,646,805 | |
+| the loop: 88 steps, each a few relations at z | 38,310,450 | 80.4% |
+| the public input's term: 31 table factors, at 7 of the additions | 5,742,146 | 12.0% |
+| setup: on-curve checks, powers of z, a_c at z, the Frobenius images, τ, the transcript header | 2,125,158 | 4.5% |
+| end: the last relations, Q(z) (80 words), the two hashes | 1,422,579 | 3.0% |
+| reading the witness, passing it between the parts | 30,334 | 0.1% |
+| transaction binding, range check | 25,496 | 0.1% |
+| total | 47,656,163 | |
 
-Of the loop, 34.1 M is in the steps and 4.0 M in passing the state from one step to the next: the state carries 22 values computed in the setup (powers of z, the points at z, a_c(z) ± z, r and r^2) and the public input to every step, and a step function gets the 9 or 16 of them it reads. Each step reads its leaf from a witness node of its own, so the leaves are not carried.
+Of the loop, 34.2 M is in the steps and 4.1 M in passing the state from one step to the next: the state carries 21 values computed in the setup (powers of z, the points at z, a_c(z) ± z and r^2) and the public input to every step, and a step function gets the 9 or 15 of them it reads. Each step reads its leaf from a witness node of its own, so the leaves are not carried.
 
 ## Where the bytes go
 
@@ -38,7 +38,7 @@ Of the loop, 34.1 M is in the steps and 4.0 M in passing the state from one step
 | the public input's tables: 31 selected entries of 4 words, τ, and the commitments of 254 pruned branches | 12,288 |
 | other constants: the curve and field constants | about 1,600 |
 | 37 committed Miller values, 6 words each | 7,104 |
-| quotient Q, 160 coefficients | 5,120 |
+| quotient Q: its 80 coefficients of odd degree | 2,560 |
 | B's slopes, 88 steps | 5,632 |
 | a_c, the proof, the challenges, the input, the sibling | 576 |
 
@@ -54,14 +54,14 @@ Of the loop, 34.1 M is in the steps and 4.0 M in passing the state from one step
 | F_p addition | 2,579 |
 | 12-term dot product, one reduction | 116,744 |
 | loop step: doubling (51 of them) | 315,253 |
-| loop step: doubling with a committed Miller value (14) | 473,513 |
-| loop step: addition, committed (23, the two Frobenius additions with g = 1) | 497,433 |
-| Q(z): eight coefficients (20 calls) | 94,597 |
+| loop step: doubling with a committed Miller value (14) | 476,081 |
+| loop step: addition, committed (23, the two Frobenius additions with g = 1) | 499,801 |
+| Q(z): eight coefficients (10 calls) | 94,597 |
 | a(t) for an element of F_p6 by Horner's rule (5 calls in the setup) | 80,097 |
 | a factor of the public input's term: σ ± b2 at z (31 calls) | 130,429 |
-| a factor with its selection and its share of the products | about 183,000 |
+| a factor with its selection and its share of the products | about 185,000 |
 
-A doubling step evaluates B's slope and the two lines at z and -z, updates N and D, and adds its relations to the Horner sum; a committed one also evaluates the committed value (a 6-term dot product). Computed in the tower, the same step would cost 3,644,556.
+A doubling step evaluates B's slope and the two lines at z and -z, updates N and D, and adds its relation to a Horner sum; a committed one also evaluates the committed value (a 6-term dot product). Computed in the tower, the same step would cost 3,644,556.
 
 ## Time
 
@@ -112,11 +112,11 @@ gunzip -c $E/verifier.simpl.gz | cmp - build/check.simpl && gunzip -c $E/verifie
 
 Each toy verifier's output was spent with its proof on an Elements 23.3.1 regtest node (standardness enforced) by `tools/regtest.sh`, and on Liquid testnet by `tools/liquid.py prove`. On regtest, the script also shows that the same proof is refused in a transaction paying someone else (`Assertion failed inside jet`), and spends a second output of the same leaf through its key path, at 721 WU. Liquid testnet refuses a redirected proof in the same way.
 
-| verifier | regtest: proof spend | Liquid testnet: proof spend |
+| verifier | regtest: proof spend | Liquid testnet: proof spend, with the earlier programs |
 |---|---|---|
-| Groth16, circom | 53,315 WU | [`e2ef29c6…`](https://blockstream.info/liquidtestnet/tx/e2ef29c65f059af741c3bd5623e22c2926703bc662f15d0582734630cfc7a44d), 53,314 WU, fee 1,334 sat |
-| Groth16, Noir | 67,803 WU | [`6224147f…`](https://blockstream.info/liquidtestnet/tx/6224147f1463e43bde8b5044b6c9a85849d98fc6647aa8122aea336f8d4fbdd6), 67,812 WU, fee 1,697 sat |
-| fflonk, SHA-256 transcript | 126,589 WU | [`dc5b3334…`](https://blockstream.info/liquidtestnet/tx/dc5b333468ef696594df2956be9c00c22d0cc73cb0ad6aaca41ce6488cc02c93), 126,577 WU, fee 3,166 sat |
-| fflonk, Keccak transcript | 185.3 kWU | [`5a64e6be…`](https://blockstream.info/liquidtestnet/tx/5a64e6beb6e02e42d2a1c4eda88cd26ebffd72015fc646700e63932dd043da79), 185,285 WU, fee 4,634 sat |
+| Groth16, circom | 50,730 WU | [`e2ef29c6…`](https://blockstream.info/liquidtestnet/tx/e2ef29c65f059af741c3bd5623e22c2926703bc662f15d0582734630cfc7a44d), 53,314 WU, fee 1,334 sat |
+| Groth16, Noir | 64,879 WU | [`6224147f…`](https://blockstream.info/liquidtestnet/tx/6224147f1463e43bde8b5044b6c9a85849d98fc6647aa8122aea336f8d4fbdd6), 67,812 WU, fee 1,697 sat |
+| fflonk, SHA-256 transcript | 126,537 WU | [`dc5b3334…`](https://blockstream.info/liquidtestnet/tx/dc5b333468ef696594df2956be9c00c22d0cc73cb0ad6aaca41ce6488cc02c93), 126,577 WU, fee 3,166 sat |
+| fflonk, Keccak transcript | 186,832 WU | [`5a64e6be…`](https://blockstream.info/liquidtestnet/tx/5a64e6beb6e02e42d2a1c4eda88cd26ebffd72015fc646700e63932dd043da79), 185,285 WU, fee 4,634 sat |
 
-The Liquid testnet spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next. The Keccak row's regtest weight is the one in [fflonk.md](fflonk.md), from an earlier regtest run.
+The Liquid testnet spends were made with the programs as they were before the quotient was halved, whose witness held all 160 coefficients of Q; the programs as they are now have been spent on regtest only. Those spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next.

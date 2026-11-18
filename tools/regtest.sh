@@ -8,8 +8,8 @@
 #
 # Before: `make harness`, `python3 tools/demo.py setup --out build/multiplier` and
 # `tools/harness/target/release/deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.
-# The other verifiers run the same way, from `setup --frontend noir` (a 17 kvB transaction) or
-# `setup --protocol fflonk [--transcript sha256]` (46 kvB with Keccak, 32 kvB with SHA-256).
+# The other verifiers run the same way, from `setup --frontend noir` (a 16 kvB transaction) or
+# `setup --protocol fflonk [--transcript sha256]` (47 kvB with Keccak, 32 kvB with SHA-256).
 #
 # The node needs Simplicity enabled and a funded wallet.  elements.conf:
 #     chain=elementsregtest
@@ -22,7 +22,7 @@
 # then `elements-cli createwallet w` and `elements-cli rescanblockchain` to claim the free coins.
 #
 # Environment: ELEMENTS_CLI (default `elements-cli`, e.g. "elements-cli -datadir=..."), DEPLOY (the
-# deploy binary), FEE in satoshis (100000 is about 7.5 sat/vB for this 13.3 kvB transaction), SECRET (the
+# deploy binary), FEE in satoshis (100000 is about 7.9 sat/vB for this 12.7 kvB transaction), SECRET (the
 # key path's secret in hex; by default the one in $OUT/keypath.secret, or a fresh one written there).
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

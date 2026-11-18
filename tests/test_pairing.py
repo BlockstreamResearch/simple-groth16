@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The pairing check as one polynomial identity (groth/core/pairing.py), on an instance with
 e(A, B) e(L, gamma) e(C, delta) e(alpha, beta) = 1, L = IC_0 + x IC_1 for a public input x.  The model's
-S(z) must equal Q(z) M(z), the program must accept, and it must reject witnesses that are wrong in one
+S(z) must equal z Q'(z^2) M(z) for the odd quotient Q = w Q'(w^2), every relation must be even or odd as
+the generator counts it, the program must accept, and it must reject witnesses that are wrong in one
 place but sealed consistently (r, Q and z recomputed), so that only the identity can catch them: a wrong
 slope, a wrong Miller value, a wrong residue witness, a wrong public input.  A wrong challenge (r or z), a
 word changed to another encoding of its value without sealing again must be rejected too, and a false
@@ -93,7 +94,7 @@ def main():
     delta, const, gt, pairs, x = instance(rng, random.Random(11))
     _, (C, _) = pairs  # the check's first point is A itself here (Groth16 passes -A)
     deg = PC.window_plan(1)[0]
-    print(f'{PC.N_RELS} relations, S of degree {deg}, Q of {PC.q_words(deg)} coefficients')
+    print(f'{PC.N_RELS} relations, S of degree {deg}, Q of {PC.q_words(deg)} words')
     # prover and model
     t0 = time.time()
     prover = PC.Prover(delta, const, gt)
@@ -105,12 +106,21 @@ def main():
     w = prover.witness(pairs, [x])
     r, z = F.from_mont(w['r']), F.from_mont(w['z'])
     R = PC.NumRing(z)
-    S = PC.horner(R, PC.relations(R, w['values'], prover.lines), r)
-    assert poly.evaluate([F.from_mont(q) for q in w['q']], z) * poly.evaluate(poly.M, z) % P == S
-    # the degrees the generator counts (and sizes Q by) are the relations' degrees
-    degs = [len(poly.trim(rel)) - 1 for rel in PC.relations(PC.PolyRing, w['values'], prover.lines)]
+    S = PC.combine(R, PC.relations(R, w['values'], prover.lines), r)
+    # Q = w Q'(w^2), and the witness has the coefficients of Q'
+    assert z * poly.evaluate([F.from_mont(q) for q in w['q']], z * z) * poly.evaluate(poly.M, z) % P == S
+    # the degrees the generator counts (and sizes Q by) are the relations' degrees, and each relation is
+    # even or odd as the generator takes it to be: that is what makes S odd, and Q with it
+    rels = PC.relations(PC.PolyRing, w['values'], prover.lines)
+    degs = [len(poly.trim(rel)) - 1 for rel in rels]
     assert degs == PC._degrees(PC.COMMIT, {s: len(ws) for s, ws in prover.plan.items()})
-    print(f'witness in {time.time() - t0:.1f}s, S(z) = Q(z) M(z), relation degrees as counted (at most {max(degs)})')
+    odd = PC.parities()
+    assert len(odd) == len(rels) == PC.N_RELS and all(not any(rel[1 - o :: 2]) for rel, o in zip(rels, odd))
+    assert all(d % 2 == o for d, o in zip(degs, odd)) and max(d + 1 - o for d, o in zip(degs, odd)) == deg
+    print(
+        f"witness in {time.time() - t0:.1f}s, S(z) = z Q'(z^2) M(z), relation degrees and parities as counted "
+        f'({odd.count(False)} even, {odd.count(True)} odd, S of degree at most {deg})'
+    )
     bad = [(how, *tampered(prover, w, x, how)) for how in ('slope', 'Miller value', 'residue witness', 'public input')]
     wrong_r = dict(w)
     wrong_r['r'] ^= 1

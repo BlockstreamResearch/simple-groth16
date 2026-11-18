@@ -2,11 +2,12 @@
 PYTHON ?= python3
 HARNESS := tools/harness
 E := examples/multiplier
-# the tests that run programs through the harness (inputs2: the verifier of a key with two public inputs;
+# the tests that run programs through the harness (pairing_fixed: the pairing check for two fixed points
+# of G2, which the fflonk verifier uses; inputs2: the verifier of a key with two public inputs;
 # inputs: keys with 3 to 5, in the numeric model and, for the window factors, in the harness;
 # fflonk_keccak, fflonk_sha256: the fflonk verifier in each transcript mode; noir: the Groth16 verifier of
 # a Noir circuit, bound by its first public input)
-HARNESS_TESTS := fp curve pairing g2_check binding groth16 inputs2 inputs keccak msm fflonk_keccak fflonk_sha256 noir
+HARNESS_TESTS := fp curve pairing pairing_fixed g2_check binding groth16 inputs2 inputs keccak msm fflonk_keccak fflonk_sha256 noir
 # and the plain-Python ones: poly, invariants (what the generator refuses), tools (what the command-line
 # tools refuse), liquid (tools/liquid.py with its chain faked), and bn254_ref, which checks the reference
 # against py_ecc

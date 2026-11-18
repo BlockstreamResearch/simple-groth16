@@ -7,10 +7,11 @@
 `program` writes x.simpl (then `deploy compile` makes x.uprog and `deploy address` the output to fund).
 `witness` writes x.w0.json for `deploy spend`; it verifies the proof first (groth/fflonk/reference.py).
 
-The verifier costs more than its program and witness weigh, so the witness carries padding (zero blocks
-of 512 bytes, groth/fflonk/verifier.py) to raise the input's budget.  `witness` runs the program once in hand
-(HAND, default tools/harness/target/release/hand) to learn the pruned program's size and pads just
-enough; --pad N sets the number of blocks instead.  hand runs programs in a dummy environment, whose
+Where the verifier costs more than its program and witness weigh (it does with the Keccak transcript),
+the witness carries padding (zero blocks of 512 bytes, groth/fflonk/verifier.py) to raise the input's
+budget.  `witness` runs the program once in hand (HAND, default tools/harness/target/release/hand) to
+learn the pruned program's size and pads just enough, or not at all; --pad N sets the number of blocks
+instead.  hand runs programs in a dummy environment, whose
 sighash is not the transaction's, so with --bind it measures the program without the binding.  The
 program measured is smaller than the one spent (it has no binding, and no padding group taken), so the
 budget it predicts is a lower bound.

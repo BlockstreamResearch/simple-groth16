@@ -73,7 +73,7 @@ The generator is a Python library, `groth/`, that writes the program as text in 
 | `groth16/verifier.py` | the whole verifier |
 | `core/bn254.py` | the plain-Python reference everything is tested against |
 
-The fflonk verifier adds `core/keccak.py`, `core/msm.py`, `core/frprog.py` and `fflonk/`.
+The fflonk verifier adds `core/pairing_fixed.py` (the same identity for two fixed G2 points), `core/keccak.py`, `core/msm.py`, `core/frprog.py` and `fflonk/`.
 
 The rest of this document follows the layers from the bottom up.
 

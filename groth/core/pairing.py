@@ -69,6 +69,9 @@ gets rho and z as witness words and compares them with the two hashes at the end
 
 `relations` is written once over an abstract ring: the prover runs it on polynomials to get S and Q,
 the tests run it on numbers to compare with the program.
+
+pairing_fixed.py is the same identity for a check whose two points of G2 are both fixed (fflonk's): the
+lines of both are constants, and no slope is committed.
 """
 
 from __future__ import annotations
@@ -289,14 +292,21 @@ def relations(
         x, y = x2, R.sub(m, R.mul(lam, x2))
     rels.append(R.sub(x, phi(xb.conj() * bn254.FROB3[2])))
     rels.append(R.sub(y, phi(yb.conj() * -bn254.FROB3[3])))
-    # u pi(c'^-1) pi^2(c') pi^3(c'^-1) = tau, with pi^n(c') = (a(t_n) + t_n) / (a(t_n) - t_n)
+    rels.append(last_relation(R, v, N, D))
+    return rels
+
+
+def last_relation(R: Ring, v: dict[str, Any], N: Any, D: Any) -> Any:
+    """u pi(c'^-1) pi^2(c') pi^3(c'^-1) = tau for u = N / D after the loop, as a fraction's numerator: with
+    pi^n(c') = (a(t_n) + t_n) / (a(t_n) - t_n) for a = v['ac'], and tau = (a_t + w) / (a_t - w) for a_t =
+    v['tau']."""
+    X = R.X
     t = [frob_w(R, n) for n in (1, 2, 3)]
     a = [frob_even(R, v['ac'], n) for n in (1, 2, 3)]
     at = R.even(v['tau'])
     num = R.mul(R.mul(R.mul(R.mul(N, R.sub(a[0], t[0])), R.add(a[1], t[1])), R.sub(a[2], t[2])), R.sub(at, X))
     den = R.mul(R.mul(R.mul(R.mul(D, R.add(a[0], t[0])), R.sub(a[1], t[1])), R.add(a[2], t[2])), R.add(at, X))
-    rels.append(R.conj_sub(num, den))
-    return rels
+    return R.conj_sub(num, den)
 
 
 def frob_w(R: Ring, n: int) -> Any:
@@ -749,7 +759,139 @@ CORE = ('N', 'D', 'se', 'x', 'y')  # what every step changes
 STATE = (*CORE, 'so')
 
 
-class PairingCheck:
+class Parts:
+    """What the generators of the check share (PairingCheck here, pairing_fixed.FixedCheck for two fixed
+    points of G2): the field helpers, the checks of the committed words, the transcript's hashing, and
+    the functions QCHUNK and EVAL.  A generator sets fp, be, b (the bounds of its loop state), and
+    defines TOP2, QCHUNK and EVAL."""
+
+    fp: Fp
+    be: Any
+    b: dict[str, int]
+    TOP2: Any
+    EVAL: Any
+    QCHUNK: Any
+
+    def one(self) -> Val:
+        return self.fp.const(1)
+
+    def m1(self) -> Val:
+        return self.fp.const(P - 1)
+
+    def rd(self, pairs: Sequence[tuple[Val, Val]]) -> Val:
+        return self.fp.reduce_dot(pairs)
+
+    def rd_plus(self, pairs: Sequence[tuple[Val, Val]], v: Val) -> Val:
+        """rd(pairs) + v: a term v 1 is added after the reduction, which saves its two products."""
+        return self.fp.add(self.rd(pairs), v)
+
+    # hashing and the committed words
+    def top2_zero(self, w: Term) -> Term:
+        """The word is below 2^254: its two top bits are 0.  Committed words are multiplied in long dot
+        products, whose CRT bound a full 256-bit word would exceed."""
+        be = self.be
+        if not is_sym(be):
+            ensure(w >> 254 == 0, 'committed word above 2^254')
+            return 0
+        return be.verify(be.not1(be.jet('or_1', be.sub(w, 'OOOOOOO', 2), 1)))
+
+    def top2_6(self, ws: Any) -> Term:
+        """top2_zero of 6 projected words (4 + 2), by TOP2."""
+        be = self.be
+        if not is_sym(be):
+            for w in flat(ws):
+                self.top2_zero(w)
+            return 0
+        return be.call(self.TOP2, [be.subtree(ws)])
+
+    def sha_init(self) -> Any:
+        be = self.be
+        return be.jet('sha_256_ctx_8_init', be.unit(), SHA_CTX_W) if is_sym(be) else b''
+
+    def sha_add(self, h: Any, parts: Sequence[Any]) -> Any:
+        """Absorb projections of 1, 2, 4, 8 or 16 words."""
+        be = self.be
+        if not is_sym(be):
+            return h + b''.join(wbytes(flat(x)) for x in parts)
+        for x in parts:
+            x = be.subtree(x) if isinstance(x, list) else x
+            h = be.jet(f'sha_256_ctx_8_add_{x.w // 8}', be.pair(h, x), SHA_CTX_W)
+        return h
+
+    def sha_final(self, h: Any) -> Term:
+        be = self.be
+        return (
+            be.jet('sha_256_ctx_8_finalize', h, 256)
+            if is_sym(be)
+            else int.from_bytes(hashlib.sha256(h).digest(), 'big')
+        )
+
+    def qchunk_body(self, accs: Any) -> Term:
+        """Body of QCHUNK: ((qz, z^16), (z^2, z^4 .. z^14)), 8 words of Q -> qz z^16 + their polynomial at
+        z^2.  Q(z) = z Q'(z^2), and Q'(z^2) is this step from the top chunk down; the words are checked
+        below 2^254."""
+        ((qz, z16), zp), q = accs
+        one, b = self.one(), self.b
+        out = self.rd(
+            [(Val(qz, b['qz']), Val(z16, KB)), (Val(q[0], F_HI), one)]
+            + [(Val(q[k], F_HI), Val(zp[k - 1], KB)) for k in range(1, 8)]
+        )
+        b['qz_out'] = max(b.get('qz_out', 0), out.hi)
+        return self.be.seq(self.be.checks([self.top2_zero(w) for w in q]), out.e)
+
+    def eval_body(self, accs: Any) -> Term:
+        """Body of EVAL: ((a_0 .. a_3, a_4 a_5), t^2) -> a(t) = sum a_k t^2k by Horner, for an element a of F_p6
+        (words below 2^254: committed words, or constants) and t^2 below KB."""
+        a, t2 = accs
+        a = flat(a)
+        t2 = Val(t2, KB)
+        acc = Val(a[5], F_HI)
+        for k in range(4, -1, -1):
+            # the inner terms join after the reduction; the last one inside it, so that a(t) is reduced
+            acc = (
+                self.rd([(acc, t2), (Val(a[k], F_HI), self.one())])
+                if k == 0
+                else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
+            )
+        self.eval_hi = acc.hi
+        return acc.e
+
+    def eval_at(self, coeffs: Any, t2: Val) -> Val:
+        """a(t) for the 6 words of a (projected, one subtree, 4 + 2 words; or a constant) and t^2, by EVAL."""
+        t2 = t2 if t2.hi <= KB else self.fp.normalize(t2)
+        be = self.be
+        a: Any
+        if not is_sym(be):
+            a = [[x.e if isinstance(x, Val) else x for x in g] for g in coeffs]
+        elif isinstance(coeffs, E):
+            a = coeffs
+        else:
+            a = be.subtree([v.e for v in flat(coeffs)])
+        return Val(be.call(self.EVAL, [a, t2.e]), self.eval_hi)
+
+    def q_value(self, q: Any, run: dict[str, Val]) -> Term:
+        """Q'(z^2) for Q in its hashing blocks, by QCHUNK from the top chunk down.  run: z^2 .. z^16."""
+        be = self.be
+        chunks = [half for blk in q for half in ([blk] if len(blk) == 8 else [blk[:8], blk[8:]])]
+        ensure(all(len(ch) == 8 for ch in chunks), 'Q is read in chunks of 8 words')
+        qz = be.word(0)
+        for ch in reversed(chunks):
+            zs = [run[f'z{k}'].e for k in range(2, 16, 2)]
+            qz = be.call(self.QCHUNK, [[[qz, run['z16'].e], zs], be.subtree(ch) if is_sym(be) else ch])
+        return qz
+
+    def challenges(self, h: Any, q: Any, rz: Any) -> list[Term]:
+        """r against the hash of the transcript h, and z against the hash of r and Q."""
+        be = self.be
+        r_hash = self.sha_final(h)
+        z_hash = self.sha_final(self.sha_add(self.sha_add(self.sha_init(), [rz[0]]), list(q)))
+        if not is_sym(be):
+            ensure(r_hash == rz[0] and z_hash == rz[1], 'challenge')
+            return []
+        return [be.verify(be.eq256(r_hash, rz[0])), be.verify(be.eq256(z_hash, rz[1]))]
+
+
+class PairingCheck(Parts):
     """Generator of the check over a backend.  delta: the fixed G2 point; const: the Miller value of
     (alpha, beta); gt: gt_constants of the IC points and gamma; b: the bounds of the loop state
     (bounds()); bits: the bit lengths of the inputs, if some are shorter than a whole input.  The tables
@@ -808,60 +950,6 @@ class PairingCheck:
         function with g = 1, which saves a function."""
         kind = STEPS[k][0]
         return ('A' if kind == 'F' and COMMIT[k] else kind), COMMIT[k]
-
-    def one(self) -> Val:
-        return self.fp.const(1)
-
-    def m1(self) -> Val:
-        return self.fp.const(P - 1)
-
-    def rd(self, pairs: Sequence[tuple[Val, Val]]) -> Val:
-        return self.fp.reduce_dot(pairs)
-
-    def rd_plus(self, pairs: Sequence[tuple[Val, Val]], v: Val) -> Val:
-        """rd(pairs) + v: a term v 1 is added after the reduction, which saves its two products."""
-        return self.fp.add(self.rd(pairs), v)
-
-    # hashing and the committed words
-    def top2_zero(self, w: Term) -> Term:
-        """The word is below 2^254: its two top bits are 0.  Committed words are multiplied in long dot
-        products, whose CRT bound a full 256-bit word would exceed."""
-        be = self.be
-        if not is_sym(be):
-            ensure(w >> 254 == 0, 'committed word above 2^254')
-            return 0
-        return be.verify(be.not1(be.jet('or_1', be.sub(w, 'OOOOOOO', 2), 1)))
-
-    def top2_6(self, ws: Any) -> Term:
-        """top2_zero of 6 projected words (4 + 2), by TOP2."""
-        be = self.be
-        if not is_sym(be):
-            for w in flat(ws):
-                self.top2_zero(w)
-            return 0
-        return be.call(self.TOP2, [be.subtree(ws)])
-
-    def sha_init(self) -> Any:
-        be = self.be
-        return be.jet('sha_256_ctx_8_init', be.unit(), SHA_CTX_W) if is_sym(be) else b''
-
-    def sha_add(self, h: Any, parts: Sequence[Any]) -> Any:
-        """Absorb projections of 1, 2, 4, 8 or 16 words."""
-        be = self.be
-        if not is_sym(be):
-            return h + b''.join(wbytes(flat(x)) for x in parts)
-        for x in parts:
-            x = be.subtree(x) if isinstance(x, list) else x
-            h = be.jet(f'sha_256_ctx_8_add_{x.w // 8}', be.pair(h, x), SHA_CTX_W)
-        return h
-
-    def sha_final(self, h: Any) -> Term:
-        be = self.be
-        return (
-            be.jet('sha_256_ctx_8_finalize', h, 256)
-            if is_sym(be)
-            else int.from_bytes(hashlib.sha256(h).digest(), 'big')
-        )
 
     # one step
     @staticmethod
@@ -981,49 +1069,6 @@ class PairingCheck:
             return be.seq(self.top2_6(leaf[1]), new) if commit else new
 
         return body
-
-    def qchunk_body(self, accs: Any) -> Term:
-        """Body of QCHUNK: ((qz, z^16), (z^2, z^4 .. z^14)), 8 words of Q -> qz z^16 + their polynomial at
-        z^2.  Q(z) = z Q'(z^2), and Q'(z^2) is this step from the top chunk down; the words are checked
-        below 2^254."""
-        ((qz, z16), zp), q = accs
-        one, b = self.one(), self.b
-        out = self.rd(
-            [(Val(qz, b['qz']), Val(z16, KB)), (Val(q[0], F_HI), one)]
-            + [(Val(q[k], F_HI), Val(zp[k - 1], KB)) for k in range(1, 8)]
-        )
-        b['qz_out'] = max(b.get('qz_out', 0), out.hi)
-        return self.be.seq(self.be.checks([self.top2_zero(w) for w in q]), out.e)
-
-    def eval_body(self, accs: Any) -> Term:
-        """Body of EVAL: ((a_0 .. a_3, a_4 a_5), t^2) -> a(t) = sum a_k t^2k by Horner, for an element a of F_p6
-        (words below 2^254: committed words, or constants) and t^2 below KB."""
-        a, t2 = accs
-        a = flat(a)
-        t2 = Val(t2, KB)
-        acc = Val(a[5], F_HI)
-        for k in range(4, -1, -1):
-            # the inner terms join after the reduction; the last one inside it, so that a(t) is reduced
-            acc = (
-                self.rd([(acc, t2), (Val(a[k], F_HI), self.one())])
-                if k == 0
-                else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
-            )
-        self.eval_hi = acc.hi
-        return acc.e
-
-    def eval_at(self, coeffs: Any, t2: Val) -> Val:
-        """a(t) for the 6 words of a (projected, one subtree, 4 + 2 words; or a constant) and t^2, by EVAL."""
-        t2 = t2 if t2.hi <= KB else self.fp.normalize(t2)
-        be = self.be
-        a: Any
-        if not is_sym(be):
-            a = [[x.e if isinstance(x, Val) else x for x in g] for g in coeffs]
-        elif isinstance(coeffs, E):
-            a = coeffs
-        else:
-            a = be.subtree([v.e for v in flat(coeffs)])
-        return Val(be.call(self.EVAL, [a, t2.e]), self.eval_hi)
 
     def sample_bounds(self) -> None:
         """The bounds of the loop state: a fixed point of the step bodies, found on the numeric backend by
@@ -1389,15 +1434,8 @@ class PairingCheck:
         run = {nm: Val(w, KB) for nm, w in zip(self.run, flat(run))}
         run.update({nm: Val(w, KB) for nm, w in zip(END, end) if nm in ('z12', 'z14', 'z16')})
         b = self.b
-        chunks = [half for blk in q for half in ([blk] if len(blk) == 8 else [blk[:8], blk[8:]])]
-        ensure(
-            len(blocks(self.prover.n_q)) == len(q) and all(len(ch) == 8 for ch in chunks),
-            'Q is read in chunks of 8 words',
-        )
-        qz = be.word(0)
-        for ch in reversed(chunks):
-            zs = [run[f'z{k}'].e for k in range(2, 16, 2)]
-            qz = be.call(self.QCHUNK, [[[qz, run['z16'].e], zs], be.subtree(ch) if is_sym(be) else ch])
+        ensure(len(blocks(self.prover.n_q)) == len(q), 'the blocks of Q')
+        qz = self.q_value(q, run)
         c = {nm: Val(w, b[nm]) for nm, w in zip(STATE, flat(st), strict=True)}
         c['qz'] = Val(qz, b['qz'])
         c.update({nm: Val(w, hi) for nm, w, hi in zip(END, end, self.end_hi, strict=True)})
@@ -1429,12 +1467,8 @@ class PairingCheck:
             return cv.zero_check(rd([(c['s'], one()), (c['qz'], c['nzm'])])).e
 
         identity = chain(fp, c, steps, check)
-        r_hash = self.sha_final(h)
-        z_hash = self.sha_final(self.sha_add(self.sha_add(self.sha_init(), [rz[0]]), list(q)))
-        if not is_sym(be):
-            ensure(r_hash == rz[0] and z_hash == rz[1], 'challenge')
-            return 0
-        return be.checks([identity, be.verify(be.eq256(r_hash, rz[0])), be.verify(be.eq256(z_hash, rz[1]))])
+        hashes = self.challenges(h, q, rz)
+        return be.checks([identity, *hashes]) if is_sym(be) else 0
 
     def program(self, inputs: dict[str, Any], pts: Any, ac: Any, rz: Any, leaves: Any = None, q: Any = None) -> Term:
         """The whole check.  inputs: {'x': the public inputs (accessors or Vals), 'words': their words for the

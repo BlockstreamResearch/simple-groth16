@@ -65,6 +65,8 @@ The toy circuit `circuits/noir/multiplier`: 2 public inputs, 2 R1CS constraints.
 
 The program's bytes earn more budget than it costs, so it needs no padding.
 
+If c is the same for every spend, it can be fixed in the program instead of being an input: `groth16_snarkjs.py program vk.json --sighash-input --fix 1=21` compiles c = 21 into the key (signal 1, counted from 0), and `witness` takes the same `--fix`. The sighash is then the only verifier input, which saves the second input's cost and bytes, and the program accepts no proof for another c. `tests/test_noir.py` runs that program on the proofs in `examples/noir`.
+
 ## Using it
 
 The toy circuit:

@@ -4,7 +4,9 @@
 tools/groth16_snarkjs.py: a circuit is bound to the transaction unless --unbound is given (--values 0 is
 PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive python -O, and a witness
 whose leaves do not give the public signal is refused, as is one whose sighash is not the first public
-signal (--sighash-input).
+signal (--sighash-input).  --fix K=VALUE compiles a public signal into the key: the folded key accepts the
+proof with that value and no other, the binding applies to the signals left, and `witness` refuses a
+proof whose public.json has another value.
 
 tools/fflonk_snarkjs.py: --bind or --unbound is required; a key point off the curve is refused, also
 under python -O, and so is a proof made with the other transcript.  The proof's evaluations load reduced
@@ -110,6 +112,71 @@ def check_sighash_input(T, tmp):
     argv = ['witness', *files, '--sighash-input', '--sighash', '11' * 32, '--out', out]
     refused(T.main, argv, expect='not this sighash')
     assert not os.path.exists(out + '.w0.json')
+
+
+def check_fix(T, tmp):
+    """--fix on the Noir example's key, whose signals are (sighash, c) with c = 21."""
+    sys.path.insert(0, ROOT)
+    from groth.core import bn254 as B
+    from groth.core.dsl import CheckFailed
+    from groth.groth16 import Groth16, fix_inputs
+
+    vk_path = os.path.join(NOIR, 'verification_key.json')
+    files = [vk_path, os.path.join(NOIR, 'proof.json'), os.path.join(NOIR, 'public.json')]
+    vk, proof, inputs = T.load_vk(vk_path), T.load_proof(files[1]), T.load_public(files[2])
+    assert inputs[1] == 21 and B.groth16_verify(vk, proof, inputs)
+    # the folded key: one signal left, and it accepts the proof for c = 21 only
+    folded = fix_inputs(vk, {1: 21})
+    assert len(folded['ic']) == 2 and folded['ic'][1] == vk['ic'][1] and folded['ic'][0] != vk['ic'][0]
+    assert B.groth16_verify(folded, proof, inputs[:1])
+    assert not B.groth16_verify(fix_inputs(vk, {1: 22}), proof, inputs[:1])
+    assert not B.groth16_verify(folded, proof, [inputs[0] ^ 1])
+    assert fix_inputs(vk, {}) == vk and fix_inputs(vk, {1: 0})['ic'] == vk['ic'][:2]  # 0 times a point
+    # any signal, in any order: fixing both leaves the constant L of the proof's inputs
+    both = fix_inputs(vk, {1: 21, 0: inputs[0]})
+    assert both['ic'] == [B.g1_add(B.g1_add(vk['ic'][0], B.g1_mul(vk['ic'][1], inputs[0])), B.g1_mul(vk['ic'][2], 21))]
+    assert both == fix_inputs(fix_inputs(vk, {0: inputs[0]}), {0: 21})
+    for bad in ({2: 1}, {-1: 1}, {1: B.R}, {1: -1}):
+        try:
+            fix_inputs(vk, bad)
+            raise AssertionError(f'not refused: {bad}')
+        except CheckFailed:
+            pass
+    # IC_0 + a IC_1 at infinity: a key built for it is refused, not compiled
+    try:
+        fix_inputs({**vk, 'ic': [B.g1_neg(vk['ic'][1]), vk['ic'][1], vk['ic'][2]]}, {0: 1})
+        raise AssertionError('not refused: IC_0 at infinity')
+    except CheckFailed:
+        pass
+    # the tool
+    out = os.path.join(tmp, 'fx')
+    program = lambda *flags: ['program', vk_path, *flags, '--out', out]
+    for item, expect in (
+        ('1', 'give K=VALUE'),
+        ('c=21', 'give K=VALUE'),
+        ('1=twenty', 'give K=VALUE'),
+        ('2=21', 'public signals 0 to 1'),
+        ('-1=21', 'public signals 0 to 1'),
+        (f'1={B.R}', 'not below r'),
+        ('1=-1', 'not below r'),
+    ):
+        refused(T.main, program('--unbound', f'--fix={item}'), expect=expect)
+    refused(T.main, program('--unbound', '--fix', '1=21', '--fix', '1=21'), expect='fixed twice')
+    refused(T.main, program('--unbound', '--fix', '0=5', '--fix', '1=21'), expect='at least one public signal')
+    refused(T.main, program('--sighash-input', '--fix', '0=5'), expect='signal 0 is the sighash')
+    # the binding by the tree wants one signal left: here it is the key's signal 0
+    refused(T.main, program('--values', '0'), expect='one public signal')
+    assert not os.path.exists(out + '.simpl')
+    T.main(program('--sighash-input', '--fix', '1=0x15'))  # 21
+    with open(out + '.simpl') as f:
+        assert f.read() == Groth16.compile(folded, sighash_input=True)[0]
+    # the witness: the same --fix, and a public.json with another value there is refused
+    sighash = '9ef140b9bd336a9c5f00476986ac6a42cbadba9edd3de4b7fe36b5490fd0754a'  # the harness's dummy
+    witness = lambda *flags: ['witness', *files, '--sighash-input', '--sighash', sighash, *flags, '--out', out]
+    refused(T.main, witness('--fix', '1=22'), expect='the program fixes it to 22')
+    assert not os.path.exists(out + '.w0.json')
+    T.main(witness('--fix', '1=21'))  # checks the witness in the numeric model of the folded key's verifier
+    assert os.path.exists(out + '.w0.json')
 
 
 def check_ptau(tmp):
@@ -251,6 +318,7 @@ def main():
         check_optimized(tmp)
         check_wrong_leaves(T, tmp)
         check_sighash_input(T, tmp)
+        check_fix(T, tmp)
         check_ptau(tmp)
         check_fflonk(tmp)
         check_loaders(tmp)

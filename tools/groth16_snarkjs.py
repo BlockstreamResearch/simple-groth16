@@ -23,6 +23,14 @@ the signal lacks its top three bits.
 --unbound (in place of the others): every public signal is a verifier input (about 6 M mWU and
 12 to 14 kB each).  Nothing binds the transaction: anyone who sees a spend can reuse its witness in another
 transaction to the same output, and the public inputs are whatever the spender proves.
+
+--fix K=VALUE (with any of the three, and as often as needed): public signal K, counted from 0 as
+public.json lists them, has the value VALUE (decimal, or hex with 0x) in every proof the program accepts.
+The signal is compiled into the key (its point times VALUE joins IC_0), so it is no verifier input and
+costs nothing.  For signals that are constants of a deployment: the hash of the program a wrapper circuit
+proves, a version, an exit code.  The signals left are the verifier's inputs, and the binding applies to
+them: one signal, the root, with --values; the sighash first with --sighash-input, so signal 0 cannot be
+fixed then.  `witness` takes the same --fix, and refuses a proof whose public.json has another value there.
 """
 
 import argparse
@@ -38,7 +46,7 @@ from groth.core import fp as F
 from groth.core import pairing as PC
 from groth.core.dsl import CheckFailed
 from groth.core.sym import Num
-from groth.groth16 import Groth16
+from groth.groth16 import Groth16, fix_inputs
 
 
 def need(ok, msg):
@@ -81,9 +89,27 @@ def load_leaves(path):
     return sighash, values
 
 
+def parse_fix(items, n):
+    """--fix K=VALUE ...: {index: value} for a key with n public signals."""
+    fixed = {}
+    for item in items or []:
+        k, eq, v = item.partition('=')
+        try:
+            k, v = int(k), int(v, 0)
+        except ValueError:
+            k = None
+        need(eq == '=' and k is not None, f'--fix {item}: give K=VALUE, a public signal (from 0) and its value')
+        need(0 <= k < n, f'--fix {item}: the key has public signals 0 to {n - 1}')
+        need(0 <= v < B.R, f'--fix {item}: the value is not below r')
+        need(k not in fixed, f'--fix {item}: signal {k} is fixed twice')
+        fixed[k] = v
+    return fixed
+
+
 def binding_depth(n, n_values, leaf_values, unbound):
     """The depth of the public-signal tree: binding.depth_of(N + 1) for a bound circuit with N values
-    (--values N, or the values of --leaves), 0 only with an explicit --unbound."""
+    (--values N, or the values of --leaves), 0 only with an explicit --unbound.  n: the verifier's inputs,
+    the public signals that are not fixed."""
     if leaf_values is not None:
         need(
             n_values is None or n_values == len(leaf_values),
@@ -95,7 +121,7 @@ def binding_depth(n, n_values, leaf_values, unbound):
     if not bound:
         return 0
     need(n_values >= 0, '--values is at least 0')
-    need(n == 1, f'a bound circuit has one public signal, the key has {n}')
+    need(n == 1, f'a bound circuit has one public signal, the key has {n} (not counting fixed ones)')
     return binding.depth_of(n_values + 1)
 
 
@@ -109,10 +135,18 @@ def main(argv=None):
     ap.add_argument('--unbound', action='store_true', help='no transaction binding: every public signal is an input')
     ap.add_argument('--sighash-input', action='store_true', help='bound by the first public signal, the sighash')
     ap.add_argument('--sighash', help="witness with --sighash-input: the transaction's sighash, 64 hex digits")
+    ap.add_argument('--fix', action='append', metavar='K=VALUE', help='public signal K (from 0) is always VALUE')
     a = ap.parse_args(argv)
-    vk = load_vk(a.files[0])
-    n = len(vk['ic']) - 1
+    key = load_vk(a.files[0])  # the key as snarkjs wrote it, which the proof is checked against
     by_input = a.sighash_input
+    fixed = parse_fix(a.fix, len(key['ic']) - 1)
+    need(not (by_input and 0 in fixed), '--fix: with --sighash-input, signal 0 is the sighash')
+    need(not fixed or len(fixed) < len(key['ic']) - 1, '--fix: at least one public signal stays a verifier input')
+    try:
+        vk = fix_inputs(key, fixed)  # the key the program is compiled for
+    except CheckFailed as e:
+        sys.exit(f'groth16_snarkjs.py: --fix: {e}')
+    n = len(vk['ic']) - 1
     need(by_input or a.sighash is None, '--sighash goes with --sighash-input')
     if by_input:
         alone = a.values is None and not a.leaves and not a.unbound
@@ -137,15 +171,19 @@ def main(argv=None):
             bound = f'bound to the transaction (tree depth {depth})'
         else:
             bound = 'NOT bound to the transaction (--unbound)'
+        const = f' ({len(fixed)} more fixed in the key)' if fixed else ''
         print(
-            f'wrote {a.out}.simpl: {n} public input{"s" if n > 1 else ""}, {bound}, '
+            f'wrote {a.out}.simpl: {n} public input{"s" if n > 1 else ""}{const}, {bound}, '
             f'cost bound {cost:,} mWU ({time.time() - t0:.0f}s)'
         )
         return
     need(len(a.files) == 3, 'witness needs verification_key.json proof.json public.json')
     proof, inputs = load_proof(a.files[1]), load_public(a.files[2])
-    need(len(inputs) == n, f'public.json has {len(inputs)} signals, the key {n}')
-    need(B.groth16_verify(vk, proof, inputs), 'the proof does not verify')
+    need(len(inputs) == len(key['ic']) - 1, f'public.json has {len(inputs)} signals, the key {len(key["ic"]) - 1}')
+    need(B.groth16_verify(key, proof, inputs), 'the proof does not verify')
+    for k, v in sorted(fixed.items()):
+        need(inputs[k] == v, f'public signal {k} is {inputs[k]}, and the program fixes it to {v}')
+    inputs = [x for k, x in enumerate(inputs) if k not in fixed]  # the verifier's inputs
     g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth, sighash_input=by_input)
     if by_input:
         need(binding.bound_signal(sighash, []) == inputs[0], 'the first public signal is not this sighash')

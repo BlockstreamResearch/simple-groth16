@@ -12,6 +12,10 @@ must be rejected: an evaluation, a challenge word, a public input, an inverse hi
 fixed-base scalar, an MSM hint, the pairing's G1 slot or its G2 slot, and, in Keccak mode, a valid proof
 for another sighash.  `quick` skips the programs.
 
+The padding also runs as a program of its own: blocks of zeros pass at the predicted cost whichever groups
+are taken, each block at the same cost, and a taken group with a word that is not 0 is rejected: 1, or
+one of secp256k1's two primes, which one of the pair's two zero tests accepts.
+
 The proofs bind the harness's dummy sighash (DUMMY_SIGHASH): circuits/multiplier_fflonk.circom with
 a = 3, b = 7, made by tools/demo.py (the SHA-256 one by tools/snarkjs_sha256.mjs).
 """
@@ -29,8 +33,8 @@ from groth.core import bn254 as B
 from groth.core import pairing as PC
 from groth.core import snarkjs
 from groth.core.dsl import CheckFailed
-from groth.core.fp import Fp
-from groth.core.sym import Num
+from groth.core.fp import N_SECP, P_SECP, Fp
+from groth.core.sym import Num, Sym
 from groth.fflonk import reference as ref
 from groth.fflonk import verifier as FF
 
@@ -150,8 +154,62 @@ def program(mode):
     )
 
 
+def padding():
+    """The padding alone, as a program whose witness nodes are the selector and the groups."""
+    be = Sym(0)
+    pad = FF.Padding(be)
+    body = pad.program()
+    be.em.define('main', body.t)
+    cost = lambda blocks: body.c - pad.saved(blocks)
+    # a block costs the same in every group: its checks, and its witness node read once (2 mWU per bit)
+    per_block = [c / 2**k for k, c in enumerate(pad.group_cost)]
+    assert max(per_block) - min(per_block) < 500 and max(per_block) < 32_000, per_block
+
+    def value(blocks, words=(), sel=None):
+        """The witness of `blocks` blocks; words: (group, index, value) for each word of a group to change."""
+        v = FF.Padding.value(blocks)
+        if sel is not None:
+            v['wpsel'] = {'w': f'{sel:04x}'}
+        for k, i, x in words:
+            node = v[f'wpad{k}'] = copy.deepcopy(v[f'wpad{k}'])
+            n = 16 << k
+            while n > 1:  # the i-th of the node's n words
+                n //= 2
+                node, i = node['p'][i // n], i % n
+            node['w'] = f'{x:064x}'
+        return v
+
+    good = [0, 1, 0b101010101, 0b010101010, 2**FF.PAD_GROUPS - 1]
+    bad = {
+        'a word of 1': value(1, [(0, 0, 1)]),
+        'a second word of 1': value(1, [(0, 1, 1)]),
+        'a word of p_s': value(1, [(0, 0, P_SECP)]),
+        # both words of a pair: equal, and 0 modulo one prime, so only the test modulo the other rejects it
+        'a pair of words p_s': value(1, [(0, 2, P_SECP), (0, 3, P_SECP)]),
+        'a pair of words n_s': value(1, [(0, 14, N_SECP), (0, 15, N_SECP)]),
+        'the last word of a group of 8': value(8, [(3, 127, 1)]),
+        'a pair of words p_s in a group of 256': value(256, [(8, 2048, P_SECP), (8, 2049, P_SECP)]),
+        'a selector above its 9 bits': value(1, sel=0x0201),
+    }
+    name = f'padding_{MODES[0]}'  # the two modes may run side by side (make -j): a file name for each
+    results = harness.run(name, be.em.text(), value(good[0]), multi=[value(b) for b in good[1:]] + list(bad.values()))
+    for blocks, res in zip(good, results):
+        r = harness.expect_ok(res, f'padding, {blocks} blocks')
+        assert r['cost'] == cost(blocks), (blocks, r['cost'], cost(blocks))
+    for label, res in zip(bad, results[len(good) :]):
+        harness.expect_rejected(res, f'padding: {label}')
+    # a changed word in a group that is not taken is pruned with it
+    r = harness.expect_ok(harness.run(name, be.em.text(), value(1, [(3, 5, 1)])), 'padding, a group not taken')
+    assert r['cost'] == cost(1)
+    print(
+        f'padding: {per_block[0]:,.0f} mWU a block in a group of 1, {per_block[-1]:,.0f} in a group of 256; '
+        f'{len(bad)} changed witnesses rejected'
+    )
+
+
 def main():
     reference()
+    padding()
     if QUICK:
         return
     for m in MODES:

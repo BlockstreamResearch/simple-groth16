@@ -35,6 +35,8 @@ JET_COST = {
     'scalar_add': 739,
     'scalar_negate': 490,
     'eq_256': 225,
+    'fe_is_zero': 268,
+    'scalar_is_zero': 271,
     'eq_64': 100,
     'lt_64': 76,
     'and_1': 79,
@@ -144,6 +146,9 @@ class Sym:
         """Bit i (0 = least significant) of a projected 256-bit word, as a value of type 2."""
         assert e.w == 256
         return self.sub(e, ''.join('O' if (255 - i) >> (7 - k) & 1 == 0 else 'I' for k in range(8)), 1)
+
+    def take(self, e: E) -> E:
+        return E(f'take ({e.t})', e.w, 100 + e.c, None if e.path is None else 'O' + e.path)
 
     def drop(self, e: E) -> E:
         return E(f'drop ({e.t})', e.w, 100 + e.c, None if e.path is None else 'I' + e.path)

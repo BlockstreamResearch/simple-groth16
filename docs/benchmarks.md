@@ -68,12 +68,12 @@ A doubling step evaluates B's slope and the two lines at z and -z, updates N and
 | | |
 |---|---|
 | `groth16_snarkjs.py program`: the program from a key, with its tables (Python) | 5 s |
-| `groth16_snarkjs.py witness`: check the proof, then the Miller values, residue witness and quotient (Python) | 8 s |
-| `deploy compile`: parse the 2.8 MB program text, once per key | 3.1 min |
-| `deploy compile` of the Noir verifier (5.4 MB, two inputs) and of the fflonk SHA-256 verifier | 10 min, 5.8 min |
-| `deploy spend`: load the program, prune and execute it, build the transaction | 6 s |
-| `tools/demo.py setup`: circom, the snarkjs setup and contribution, the program | 2.1 min |
-| `fflonk_snarkjs.py witness`: one run in `hand` to size the padding | 5.6 min |
+| `groth16_snarkjs.py witness`: check the proof, then the Miller values, residue witness and quotient (Python) | 6 s |
+| `deploy compile`: parse the 2.8 MB program text, once per key | 2.3 min |
+| `deploy compile` of the Noir verifier (5.4 MB, two inputs) and of the fflonk SHA-256 verifier | 8.3 min, 4.4 min |
+| `deploy spend`: load the program, prune and execute it, build the transaction | 3 s |
+| `tools/demo.py setup`: circom, the snarkjs setup and contribution, the program (the powers-of-tau file already downloaded) | 1.8 min |
+| `fflonk_snarkjs.py witness`: one run in `hand` to size the padding | 4.5 min |
 | `tests/test_groth16.py` | about 3 min |
 
 Measured on a 2-core cloud VM.
@@ -112,11 +112,11 @@ gunzip -c $E/verifier.simpl.gz | cmp - build/check.simpl && gunzip -c $E/verifie
 
 Each toy verifier's output was spent with its proof on an Elements 23.3.1 regtest node (standardness enforced) by `tools/regtest.sh`, and on Liquid testnet by `tools/liquid.py prove`. On regtest, the script also shows that the same proof is refused in a transaction paying someone else (`Assertion failed inside jet`), and spends a second output of the same leaf through its key path, at 721 WU. Liquid testnet refuses a redirected proof in the same way.
 
-| verifier | regtest: proof spend | Liquid testnet: proof spend, with the earlier programs |
+| verifier | regtest: proof spend | Liquid testnet: proof spend |
 |---|---|---|
-| Groth16, circom | 50,730 WU | [`e2ef29c6…`](https://blockstream.info/liquidtestnet/tx/e2ef29c65f059af741c3bd5623e22c2926703bc662f15d0582734630cfc7a44d), 53,314 WU, fee 1,334 sat |
-| Groth16, Noir | 64,879 WU | [`6224147f…`](https://blockstream.info/liquidtestnet/tx/6224147f1463e43bde8b5044b6c9a85849d98fc6647aa8122aea336f8d4fbdd6), 67,812 WU, fee 1,697 sat |
-| fflonk, SHA-256 transcript | 126,537 WU | [`dc5b3334…`](https://blockstream.info/liquidtestnet/tx/dc5b333468ef696594df2956be9c00c22d0cc73cb0ad6aaca41ce6488cc02c93), 126,577 WU, fee 3,166 sat |
-| fflonk, Keccak transcript | 186,832 WU | [`5a64e6be…`](https://blockstream.info/liquidtestnet/tx/5a64e6beb6e02e42d2a1c4eda88cd26ebffd72015fc646700e63932dd043da79), 185,285 WU, fee 4,634 sat |
+| Groth16, circom | 50,730 WU | [`bf3b0504…`](https://blockstream.info/liquidtestnet/tx/bf3b0504c20f95149ba89254951f0fc69ba192e6df6426649fefd4119e8bcfd4), 50,732 WU, fee 1,270 sat |
+| Groth16, Noir | 64,879 WU | [`5a93ac13…`](https://blockstream.info/liquidtestnet/tx/5a93ac13f6fb9788a39f5af37983f073bb6abd5634f6a6f14a8b228c1cec6cba), 64,876 WU, fee 1,624 sat |
+| fflonk, SHA-256 transcript | 124,218 WU | [`03ed82fa…`](https://blockstream.info/liquidtestnet/tx/03ed82fa713c58f16924a51255ddb69c146a469a841ca41f6bc605d1c9b9c478), 124,223 WU, fee 3,107 sat |
+| fflonk, Keccak transcript | 175,343 WU | [`789b024a…`](https://blockstream.info/liquidtestnet/tx/789b024a2c3ef0b7e616eba6b947d252825481dd2729f4d225b1cf556b0469c1), 175,343 WU, fee 4,385 sat |
 
-The Liquid testnet spends were made with the programs as they were before the quotient was halved, whose witness held all 160 coefficients of Q; the programs as they are now have been spent on regtest only. Those spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next.
+The Liquid testnet spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next.

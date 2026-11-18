@@ -9,7 +9,7 @@
 # Before: `make harness`, `python3 tools/demo.py setup --out build/multiplier` and
 # `tools/harness/target/release/deploy compile build/multiplier/verifier.simpl build/multiplier/verifier`.
 # The other verifiers run the same way, from `setup --frontend noir` (a 16 kvB transaction) or
-# `setup --protocol fflonk [--transcript sha256]` (47 kvB with Keccak, 32 kvB with SHA-256).
+# `setup --protocol fflonk [--transcript sha256]` (44 kvB with Keccak, 31 kvB with SHA-256).
 #
 # The node needs Simplicity enabled and a funded wallet.  elements.conf:
 #     chain=elementsregtest

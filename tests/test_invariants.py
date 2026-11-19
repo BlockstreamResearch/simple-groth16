@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The generator refuses to emit a program whose soundness argument would not hold: loop bounds that the
 step functions do not keep, a projection that is not a whole subtree, a binding by the tree for a key with
-more than one public input.  For a witness node read twice, the use count follows the tree unfolding,
+more than one public input, a shorter bound signal without a binding.  For a witness node read twice, the use count follows the tree unfolding,
 which compile() checks.  (No addition meeting T = Q: tests/test_g2_check.py.)  And every
 check of the generated verifier is on the path of every spend: none under a branch that pruning could drop.
 
@@ -121,6 +121,12 @@ def main():
     refused(lambda: Groth16(F.Fp(Sym(0)), vk2, depth=1), 'one public signal')
     # one binding at a time: by the tree, or by the first input
     refused(lambda: Groth16(F.Fp(Sym(0)), vk, depth=1, sighash_input=True), 'one binding')
+    # a shorter signal: only with a binding, which is what shows the input to have no bit above it; and
+    # only of a width whose windows and mask are whole bytes
+    refused(lambda: Groth16(F.Fp(Sym(0)), vk, signal_bits=200), 'a shorter signal needs a binding')
+    refused(lambda: Groth16(F.Fp(Sym(0)), vk, depth=1, signal_bits=190), 'a signal has 253 bits')
+    # nor of a width whose verifier would cost more than its bytes pay for
+    refused(lambda: Groth16(F.Fp(Sym(0)), vk, depth=1, signal_bits=160), 'a signal has 253 bits')
     print('all ok')
 
 

@@ -150,6 +150,8 @@ The program checks only the binding input. The spender chooses every other publi
 
 With Groth16, the program can pin a public signal instead: `--fix K=VALUE`, on `program` and on `witness`, makes signal K (counted from 0, as `public.json` lists them) equal to VALUE in every proof the program accepts. The signal is compiled into the key, so it is no verifier input and costs nothing. This suits signals that are constants of a deployment, such as the hash of the program a wrapper circuit proves. The binding then applies to the signals that are left ([docs/groth16.md](docs/groth16.md)).
 
+The Groth16 signal itself can be shorter: `--signal-bits N` keeps the low N bits of the root or sighash, N a multiple of 8 from 184 to 248, with `PublicMerkleRootBits(n, N)` in the circuit. The toy spend then weighs 47.6 kWU at 200 bits instead of 50.7. It leaves less margin against two transactions with the same signal (2^100 work at 200 bits, where 253 bits give 2^126), which matters when someone other than the prover has a say in the transaction; [docs/groth16.md](docs/groth16.md) explains the trade.
+
 A circuit that follows none of these conventions needs `--unbound`. Each of its public signals is then a verifier input; with Groth16, each costs about 6 M mWU and 12 to 14 kB. Nothing binds the proof to the transaction: anyone who sees the spend can reuse its witness in another transaction to the same output.
 
 ## Repository

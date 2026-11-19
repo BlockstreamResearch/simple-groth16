@@ -402,14 +402,32 @@ def q_words(deg: int) -> int:
 # steps, as many as each step's relation leaves room for under the degree cap.  A factor multiplied in
 # before k more doublings is the 2^k-th root of what it must contribute, which exists: the factors lie in
 # the group of order r.
-W_BITS, TOP_LO = 8, 248
+#
+# An input known to be shorter (the Groth16 verifier's bound signal, when it is a hash cut to fewer bits)
+# has windows for its own bits only, the top one with what is left of them.  The program must then check
+# that the input has no bit above: the tables do not read those.
+W_BITS, INPUT_BITS = 8, 254
 
 
-def windows(n: int) -> list[Window]:
-    """(input, lowest bit, width) of the windows of n inputs, the top one of the first input first."""
-    out = [(0, TOP_LO, 254 - TOP_LO)] if n else []
-    for i in range(n):
-        out += [(i, lo, W_BITS) for lo in range(0, TOP_LO, W_BITS)] + ([(i, TOP_LO, 254 - TOP_LO)] if i else [])
+def input_bits(n: int | Sequence[int]) -> tuple[int, ...]:
+    """The bit lengths of the inputs: of n whole inputs, or those given."""
+    bits = (INPUT_BITS,) * n if isinstance(n, int) else tuple(n)
+    ensure(all(1 <= b <= INPUT_BITS for b in bits), 'an input has 1 to 254 bits')
+    return bits
+
+
+def windows(n: int | Sequence[int]) -> list[Window]:
+    """(input, lowest bit, width) of the windows of the inputs (their number, or their bit lengths), the
+    top one of the first input first."""
+    bits = input_bits(n)
+
+    def top(i: int) -> Window:
+        lo = (bits[i] - 1) // W_BITS * W_BITS
+        return (i, lo, bits[i] - lo)
+
+    out = [top(0)] if bits else []
+    for i in range(len(bits)):
+        out += [(i, lo, W_BITS) for lo in range(0, top(i)[1], W_BITS)] + ([top(i)] if i else [])
     return out
 
 
@@ -432,13 +450,15 @@ def add_capacities(cap: int) -> dict[int, int]:
     return room
 
 
-_PLANS: dict[int, tuple[int, Window | None, dict[int, list[Window]]]] = {}
+_PLANS: dict[tuple[int, ...], tuple[int, Window | None, dict[int, list[Window]]]] = {}
 
 
-def window_plan(n: int) -> tuple[int, Window | None, dict[int, list[Window]]]:
+def window_plan(n: int | Sequence[int]) -> tuple[int, Window | None, dict[int, list[Window]]]:
     """(the degree of S, the window merged with the end's constant or None, step -> its windows) for n
-    public inputs: the steps with the most room first, so that few steps carry windows, under the cap
-    DEG_S, or under a higher one if the windows need it (more inputs; Q grows with it)."""
+    public inputs (or inputs of the bit lengths n): the steps with the most room first, so that few steps
+    carry windows, under the cap DEG_S, or under a higher one if the windows need it (more inputs; Q grows
+    with it)."""
+    n = input_bits(n)
     if n not in _PLANS:
         wins = windows(n)
         top = wins[0] if n else None
@@ -571,14 +591,19 @@ class Prover:
     """The witness for the pairs (-A, B), (C, delta) and the public inputs' term: gt = gt_constants(ic,
     gamma) (K_0 .. K_n for n inputs); const is the Miller value of (alpha, beta).  The tables: for each
     window, the compressed E-images of its factors by digit, and the end's constants (tau) by the digit of
-    the window merged with them."""
+    the window merged with them.  bits: the bit lengths of the inputs, if some are shorter than a whole
+    input."""
 
-    def __init__(self, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12]) -> None:
+    def __init__(
+        self, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12], bits: Sequence[int] | None = None
+    ) -> None:
         self.lines = fixed_lines(delta)
         self.const, self.gt, self.n = const, gt, len(gt) - 1
-        deg, self.top, self.plan = window_plan(self.n)
+        self.bits = input_bits(self.n if bits is None else bits)
+        ensure(len(self.bits) == self.n, 'a bit length for each public input')
+        deg, self.top, self.plan = window_plan(self.bits)
         self.n_q = q_words(deg)
-        offset = [sum(1 << lo for i2, lo, _ in windows(self.n) if i2 == i) for i in range(self.n)]
+        offset = [sum(1 << lo for i2, lo, _ in windows(self.bits) if i2 == i) for i in range(self.n)]
         inv2 = pow(2, -1, bn254.R)
         # a window at step s: digit d multiplies in K_i^((d + 1) 2^lo / 2^k), k the doublings after s
         self.expo = {
@@ -642,6 +667,7 @@ class Prover:
         E(c) and E(f), so s is not needed."""
         (nA, B), (C, _) = pairs
         ensure(len(inputs) == self.n and all(0 <= x < bn254.R for x in inputs), 'public inputs')
+        ensure(all(x >> b == 0 for x, b in zip(inputs, self.bits)), 'a public input is longer than its bits')
         res = residue or bn254.residue_witness(self.product(pairs, inputs))
         if res is None:
             return None
@@ -726,14 +752,21 @@ STATE = (*CORE, 'so')
 class PairingCheck:
     """Generator of the check over a backend.  delta: the fixed G2 point; const: the Miller value of
     (alpha, beta); gt: gt_constants of the IC points and gamma; b: the bounds of the loop state
-    (bounds())."""
+    (bounds()); bits: the bit lengths of the inputs, if some are shorter than a whole input.  The tables
+    do not read an input above its length, so the caller must check that it has no bit there."""
 
     def __init__(
-        self, fp: Fp, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12], b: dict[str, int] | None = None
+        self,
+        fp: Fp,
+        delta: bn254.G2Point,
+        const: bn254.Fp12,
+        gt: Sequence[bn254.Fp12],
+        b: dict[str, int] | None = None,
+        bits: Sequence[int] | None = None,
     ) -> None:
         ensure(additions_avoid_q(STEPS), 'an addition of the loop can meet T = Q')
         self.fp, self.be, self.cv = fp, fp.be, Curve(fp)
-        self.prover = pr = Prover(delta, const, gt)
+        self.prover = pr = Prover(delta, const, gt, bits)
         # per step, the line constants of delta: c3 and c4, two Montgomery words each
         self.data = [[to_mont(a % P) for cf in pr.lines[i] for a in (cf.c0, cf.c1)] for i in range(N_STEPS)]
         mont6 = lambda a: [[to_mont(x) for x in a[:4]], [to_mont(x) for x in a[4:]]]

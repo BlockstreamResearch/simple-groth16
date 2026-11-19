@@ -63,6 +63,19 @@ Of the loop, 34.2 M is in the steps and 4.1 M in passing the state from one step
 
 A doubling step evaluates B's slope and the two lines at z and -z, updates N and D, and adds its relation to a Horner sum; a committed one also evaluates the committed value (a 6-term dot product). Computed in the tower, the same step would cost 3,644,556.
 
+## A shorter signal
+
+The same toy circuit with its bound signal cut to fewer bits (`--signal-bits`, [groth16.md](groth16.md)), each spent on regtest. The work to find two transactions with one signal is what the shorter signal gives up; the work to find another transaction for a given proof is 2^N for N bits.
+
+| signal | two transactions with one signal | program cost | pruned program | transaction |
+|---|---|---:|---:|---:|
+| 253 bits (default) | 2^126 | 47,656,163 mWU | 34,129 bytes | 50,730 WU |
+| 200 bits | 2^100 | 46,320,395 mWU | 30,972 bytes | 47,573 WU |
+| 192 bits | 2^96 | 46,172,002 mWU | 30,629 bytes | 47,230 WU |
+| 184 bits | 2^92 | 45,975,269 mWU | 30,183 bytes | 46,784 WU |
+
+At 184 bits the budget is 46,179,000 mWU, 0.2 M above the cost. One window less (176 bits) and the cost is above the budget, so 184 bits is the shortest signal the generator allows.
+
 ## Time
 
 | | |

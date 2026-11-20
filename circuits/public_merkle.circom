@@ -12,6 +12,10 @@ pragma circom 2.0.0;
 //   root:    the 32-byte root with its top three bits cleared: the public signal
 //
 // Each hashed node costs about 59 k constraints.
+//
+// PublicMerkleRootBits(n, bits) exposes the low `bits` bits of the root instead, for a verifier compiled
+// with --signal-bits: a shorter signal costs the verifier less, and leaves less margin against two
+// transactions with the same signal (groth/core/binding.py).
 include "circomlib/circuits/sha256/sha256.circom";
 include "circomlib/circuits/bitify.circom";
 
@@ -66,8 +70,9 @@ template LimbsBits() {
     }
 }
 
-// the root of the tree of the sighash and n public values, as a field element
-template PublicMerkleRoot(n) {
+// the low `bits` bits of the root of the tree of the sighash and n public values, as a field element
+template PublicMerkleRootBits(n, bits) {
+    assert(bits == 253 || (bits >= 184 && bits <= 248 && bits % 8 == 0));
     signal input sighash[2];
     signal input values[n];
     signal output root;
@@ -111,12 +116,27 @@ template PublicMerkleRoot(n) {
             node[k][i] <== hn[k].out[i];
         }
     }
-    // the root word without its three top bits
+    // the low bits of the root word: without its three top bits, or fewer
     var acc = 0;
     var pw = 1;
-    for (var i = 255; i >= 3; i--) {
+    for (var i = 255; i >= 256 - bits; i--) {
         acc += node[1][i] * pw;
         pw = pw * 2;
     }
     root <== acc;
+}
+
+// the root with its top three bits cleared
+template PublicMerkleRoot(n) {
+    signal input sighash[2];
+    signal input values[n];
+    signal output root;
+
+    component m = PublicMerkleRootBits(n, 253);
+    m.sighash[0] <== sighash[0];
+    m.sighash[1] <== sighash[1];
+    for (var j = 0; j < n; j++) {
+        m.values[j] <== values[j];
+    }
+    root <== m.root;
 }

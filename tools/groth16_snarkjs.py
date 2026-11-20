@@ -31,6 +31,15 @@ costs nothing.  For signals that are constants of a deployment: the hash of the 
 proves, a version, an exit code.  The signals left are the verifier's inputs, and the binding applies to
 them: one signal, the root, with --values; the sighash first with --sighash-input, so signal 0 cannot be
 fixed then.  `witness` takes the same --fix, and refuses a proof whose public.json has another value there.
+
+--signal-bits N (with --values or --sighash-input, on program and on witness): the bound signal is the low
+N bits of the root, or of the sighash, N a multiple of 8 from 184 to 248, where the default keeps 253.  The
+circuit must expose the same bits (PublicMerkleRootBits(n, N) in circuits/public_merkle.circom).  The
+verifier pays for every 8 bits of the signal, so a shorter one is lighter: 47.6 kWU with 200 bits where
+253 take 50.7.  What it costs is margin.  Another transaction with the same signal takes 2^N work to find,
+which is ample; two transactions with one signal take 2^(N/2), 2^100 for 200 bits where 253 give 2^126.
+That second number matters when someone other than the prover has a say in the transaction or in the
+values behind the root.  Below 184 bits a one-input verifier would cost more than its bytes pay for.
 """
 
 import argparse
@@ -136,6 +145,13 @@ def main(argv=None):
     ap.add_argument('--sighash-input', action='store_true', help='bound by the first public signal, the sighash')
     ap.add_argument('--sighash', help="witness with --sighash-input: the transaction's sighash, 64 hex digits")
     ap.add_argument('--fix', action='append', metavar='K=VALUE', help='public signal K (from 0) is always VALUE')
+    ap.add_argument(
+        '--signal-bits',
+        type=int,
+        default=binding.SIGNAL_BITS,
+        metavar='N',
+        help='the bound signal is the low N bits of the root or sighash: 184 to 248 in bytes (default: 253)',
+    )
     a = ap.parse_args(argv)
     key = load_vk(a.files[0])  # the key as snarkjs wrote it, which the proof is checked against
     by_input = a.sighash_input
@@ -147,6 +163,12 @@ def main(argv=None):
     except CheckFailed as e:
         sys.exit(f'groth16_snarkjs.py: --fix: {e}')
     n = len(vk['ic']) - 1
+    bits = a.signal_bits
+    need(
+        bits == binding.SIGNAL_BITS or (binding.MIN_BITS <= bits <= 248 and bits % 8 == 0),
+        f'--signal-bits is a multiple of 8 from {binding.MIN_BITS} to 248 (the default signal has 253 bits)',
+    )
+    need(bits == binding.SIGNAL_BITS or not a.unbound, '--signal-bits is for a bound signal, not with --unbound')
     need(by_input or a.sighash is None, '--sighash goes with --sighash-input')
     if by_input:
         alone = a.values is None and not a.leaves and not a.unbound
@@ -162,13 +184,14 @@ def main(argv=None):
     t0 = time.time()
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     if a.command == 'program':
-        text, g, cost = Groth16.compile(vk, depth, sighash_input=by_input)
+        text, g, cost = Groth16.compile(vk, depth, sighash_input=by_input, signal_bits=bits)
         with open(a.out + '.simpl', 'w') as f:
             f.write(text)
+        short = '' if bits == binding.SIGNAL_BITS else f', a signal of {bits} bits'
         if by_input:
-            bound = 'bound to the transaction (the first public signal is the sighash)'
+            bound = f'bound to the transaction (the first public signal is the sighash{short})'
         elif depth:
-            bound = f'bound to the transaction (tree depth {depth})'
+            bound = f'bound to the transaction (tree depth {depth}{short})'
         else:
             bound = 'NOT bound to the transaction (--unbound)'
         const = f' ({len(fixed)} more fixed in the key)' if fixed else ''
@@ -184,14 +207,17 @@ def main(argv=None):
     for k, v in sorted(fixed.items()):
         need(inputs[k] == v, f'public signal {k} is {inputs[k]}, and the program fixes it to {v}')
     inputs = [x for k, x in enumerate(inputs) if k not in fixed]  # the verifier's inputs
-    g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth, sighash_input=by_input)
+    g = Groth16(F.Fp(Num()), vk, b=PC.bounds(), depth=depth, sighash_input=by_input, signal_bits=bits)
+    width = '' if bits == binding.SIGNAL_BITS else f' cut to {bits} bits (--signal-bits)'
     if by_input:
-        need(binding.bound_signal(sighash, []) == inputs[0], 'the first public signal is not this sighash')
+        need(
+            binding.bound_signal(sighash, [], bits) == inputs[0], f'the first public signal is not this sighash{width}'
+        )
         wit = g.witness(proof, inputs, sighash)
     elif depth:
         need(bool(a.leaves), '--leaves is needed for a bound circuit')
         sibs = binding.siblings([sighash] + values)
-        need(binding.bound_signal(sighash, sibs) == inputs[0], 'the leaves do not give the public signal')
+        need(binding.bound_signal(sighash, sibs, bits) == inputs[0], f'the leaves do not give the public signal{width}')
         wit = g.witness(proof, inputs, sighash, sibs)
     else:
         wit = g.witness(proof, inputs)

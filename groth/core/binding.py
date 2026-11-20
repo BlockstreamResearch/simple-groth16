@@ -16,6 +16,17 @@ The tree:
     tree:    2^depth leaves, depth = max(1, ceil(log2(number of leaves))), missing leaves are zero
     node:    SHA-256(left || right)
     signal:  the root with its top three bits cleared, so that it is below r
+
+A shorter signal.  The verifier pays for every 8 bits of a public input, so the signal may be cut to its
+low `bits` bits, a multiple of 8 from MIN_BITS to 248 (`check_bits`), in the circuit and in the program
+alike.  Another transaction, or other siblings, with the same signal is then a second preimage of a
+`bits`-bit hash, 2^bits work; two transactions with the same signal are a collision, 2^(bits / 2) work,
+which matters wherever someone other than the prover has a say in the transaction or in the values.
+
+The lower bound is not about that margin.  A shorter signal takes bytes off the program faster than cost,
+and below 184 bits the Groth16 verifier of one input costs more than its bytes pay for: every spend of
+such a program would be refused, and the coins of its output lost.  tests/test_binding.py checks that the
+budget covers the cost at MIN_BITS.
 """
 
 from __future__ import annotations
@@ -26,7 +37,8 @@ from typing import Any
 
 from .dsl import ensure
 
-MASK = 2**253 - 1
+SIGNAL_BITS = 253  # the bits of the signal: a root, or a sighash, without its top three bits
+MIN_BITS = 184  # the shortest signal whose verifier the input's budget still pays for
 SHA_PAD64 = (0x80 << 504) | 512  # the second SHA-256 block of a 64-byte message: 0x80, zeros, the bit length
 
 
@@ -75,9 +87,16 @@ def siblings(leaves: Sequence[int | bytes], index: int = 0, depth: int | None = 
     return out
 
 
-def public_signal(root_bytes: bytes) -> int:
-    """The root as the circuit's public signal: top three bits cleared."""
-    return int.from_bytes(root_bytes, 'big') & MASK
+def check_bits(bits: int) -> int:
+    """The bits of a signal: 253, or a multiple of 8 from MIN_BITS to 248."""
+    ok = bits == SIGNAL_BITS or (MIN_BITS <= bits <= 248 and bits % 8 == 0)
+    ensure(ok, f'a signal has 253 bits, or a multiple of 8 from {MIN_BITS} to 248')
+    return bits
+
+
+def public_signal(root_bytes: bytes, bits: int = SIGNAL_BITS) -> int:
+    """The root as the circuit's public signal: its low `bits` bits (253: the top three bits cleared)."""
+    return int.from_bytes(root_bytes, 'big') & (2 ** check_bits(bits) - 1)
 
 
 def sighash_limbs(sighash: int | bytes) -> list[int]:
@@ -86,12 +105,12 @@ def sighash_limbs(sighash: int | bytes) -> list[int]:
     return [v >> 128, v & (2**128 - 1)]
 
 
-def bound_signal(sighash: bytes | int, siblings: Sequence[bytes | int]) -> int:
+def bound_signal(sighash: bytes | int, siblings: Sequence[bytes | int], bits: int = SIGNAL_BITS) -> int:
     """The public input that the siblings of leaf 0 bind to the sighash (none: the masked sighash)."""
     h = leaf(sighash)
     for s in siblings:
         h = node(h, leaf(s))
-    return public_signal(h)
+    return public_signal(h, bits)
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -103,15 +122,28 @@ def sha256_64(be: Any, a: Any, b: Any) -> Any:
     return be.jet('sha_256_block', be.pair(m, be.const(512, SHA_PAD64)), 256)
 
 
-def root_check(be: Any, a1: Any, siblings: Sequence[Any]) -> Any:
+def root_check(be: Any, a1: Any, siblings: Sequence[Any], bits: int = SIGNAL_BITS) -> Any:
     """A unit-typed E: the word a1 is the masked root of the path from the sig_all_hash jet through the
-    siblings (words), or, with none, the masked sighash."""
+    siblings (words), or, with none, the masked sighash.  The whole word is compared, so a1 is below
+    2^bits."""
+    check_bits(bits)
     h = be.jet('sig_all_hash', be.unit(), 256)
     for s in siblings:
         h = sha256_64(be, h, s)
 
+    def low(hv, path='', lo=0, width=256):
+        """The chunk of hv at `path`, bits lo .. lo + width - 1, with the bits from `bits` up cleared: the
+        chunk itself, a zero constant, or the pair of its two halves."""
+        if lo + width <= bits:
+            return be.sub(hv, path, width)
+        if lo >= bits:
+            return be.const(width, 0)
+        return be.pair(low(hv, path + 'O', lo + width // 2, width // 2), low(hv, path + 'I', lo, width // 2))
+
     def masked(accs):
         hv, a = accs
+        if bits != SIGNAL_BITS:  # a multiple of 8
+            return be.verify(be.eq256(a, low(hv)))
         top = be.jet('and_8', be.pair(be.sub(hv, 'OOOOO', 8), be.const(8, 0x1F)), 8)
         m = be.pair(
             be.pair(

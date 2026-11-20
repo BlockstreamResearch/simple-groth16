@@ -63,6 +63,19 @@ Of the loop, 34.2 M is in the steps and 4.1 M in passing the state from one step
 
 A doubling step evaluates B's slope and the two lines at z and -z, updates N and D, and adds its relation to a Horner sum; a committed one also evaluates the committed value (a 6-term dot product). Computed in the tower, the same step would cost 3,644,556.
 
+## A shorter signal
+
+The same toy circuit with its bound signal cut to fewer bits (`--signal-bits`, [groth16.md](groth16.md)), each spent on regtest. The work to find two transactions with one signal is what the shorter signal gives up; the work to find another transaction for a given proof is 2^N for N bits.
+
+| signal | two transactions with one signal | program cost | pruned program | transaction |
+|---|---|---:|---:|---:|
+| 253 bits (default) | 2^126 | 47,656,163 mWU | 34,129 bytes | 50,730 WU |
+| 200 bits | 2^100 | 46,320,395 mWU | 30,972 bytes | 47,573 WU |
+| 192 bits | 2^96 | 46,172,002 mWU | 30,629 bytes | 47,230 WU |
+| 184 bits | 2^92 | 45,975,269 mWU | 30,183 bytes | 46,784 WU |
+
+At 184 bits the budget is 46,179,000 mWU, 0.2 M above the cost. One window less (176 bits) and the cost is above the budget, so 184 bits is the shortest signal the generator allows.
+
 ## Time
 
 | | |
@@ -70,10 +83,10 @@ A doubling step evaluates B's slope and the two lines at z and -z, updates N and
 | `groth16_snarkjs.py program`: the program from a key, with its tables (Python) | 5 s |
 | `groth16_snarkjs.py witness`: check the proof, then the Miller values, residue witness and quotient (Python) | 6 s |
 | `deploy compile`: parse the 2.8 MB program text, once per key | 2.3 min |
-| `deploy compile` of the Noir verifier (5.4 MB, two inputs) and of the fflonk SHA-256 verifier | 8.3 min, 4.4 min |
+| `deploy compile` of the Noir verifier (5.4 MB, two inputs) and of the fflonk SHA-256 verifier | 8.3 min, 4.2 min |
 | `deploy spend`: load the program, prune and execute it, build the transaction | 3 s |
 | `tools/demo.py setup`: circom, the snarkjs setup and contribution, the program (the powers-of-tau file already downloaded) | 1.8 min |
-| `fflonk_snarkjs.py witness`: one run in `hand` to size the padding | 4.5 min |
+| `fflonk_snarkjs.py witness`: one run in `hand` to size the padding | 4.2 min |
 | `tests/test_groth16.py` | about 3 min |
 
 Measured on a 2-core cloud VM.
@@ -87,6 +100,7 @@ python3 tests/test_fp.py bench   # F_p operations
 python3 tests/test_poly.py       # F_p12 as polynomials, against the tower
 python3 tests/test_curve.py      # on-curve checks, tables, the range check of an input
 python3 tests/test_pairing.py    # the check alone: its parts, its steps, tampered witnesses
+python3 tests/test_pairing_fixed.py  # the check for two fixed G2 points (fflonk's), alone
 python3 tests/test_g2_check.py   # the G2 membership check
 python3 tests/test_groth16.py    # the whole verifier (INPUTS=2 for two public inputs)
 python3 tests/test_inputs.py     # keys with 3 to 5 public inputs (numeric model; only some window factors run)
@@ -116,7 +130,7 @@ Each toy verifier's output was spent with its proof on an Elements 23.3.1 regtes
 |---|---|---|
 | Groth16, circom | 50,730 WU | [`bf3b0504…`](https://blockstream.info/liquidtestnet/tx/bf3b0504c20f95149ba89254951f0fc69ba192e6df6426649fefd4119e8bcfd4), 50,732 WU, fee 1,270 sat |
 | Groth16, Noir | 64,879 WU | [`5a93ac13…`](https://blockstream.info/liquidtestnet/tx/5a93ac13f6fb9788a39f5af37983f073bb6abd5634f6a6f14a8b228c1cec6cba), 64,876 WU, fee 1,624 sat |
-| fflonk, SHA-256 transcript | 124,218 WU | [`03ed82fa…`](https://blockstream.info/liquidtestnet/tx/03ed82fa713c58f16924a51255ddb69c146a469a841ca41f6bc605d1c9b9c478), 124,223 WU, fee 3,107 sat |
-| fflonk, Keccak transcript | 175,343 WU | [`789b024a…`](https://blockstream.info/liquidtestnet/tx/789b024a2c3ef0b7e616eba6b947d252825481dd2729f4d225b1cf556b0469c1), 175,343 WU, fee 4,385 sat |
+| fflonk, SHA-256 transcript | 110,868 WU | [`03ed82fa…`](https://blockstream.info/liquidtestnet/tx/03ed82fa713c58f16924a51255ddb69c146a469a841ca41f6bc605d1c9b9c478), 124,223 WU, fee 3,107 sat |
+| fflonk, Keccak transcript | 156,335 WU | [`789b024a…`](https://blockstream.info/liquidtestnet/tx/789b024a2c3ef0b7e616eba6b947d252825481dd2729f4d225b1cf556b0469c1), 175,343 WU, fee 4,385 sat |
 
-The Liquid testnet spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next.
+The Liquid testnet spends paid 0.1 sat/vB, the minimum relay feerate, plus 10 vB of slack. The weights vary by a few WU from one proof to the next. The two fflonk transactions on Liquid testnet spend the verifier as it was before its pairing check took both G2 points as constants ([fflonk.md](fflonk.md)), so they weigh more than the regtest spends beside them.

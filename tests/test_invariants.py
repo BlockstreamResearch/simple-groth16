@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from groth.core import bn254 as B
 from groth.core import fp as F
 from groth.core import pairing as PC
+from groth.core import pairing_fixed as PF
 from groth.core.dsl import CheckFailed, Emitter
 from groth.core.sym import Sym, words
 from groth.groth16 import Groth16
@@ -106,6 +107,11 @@ def main():
         b = dict(PC.bounds())
         b[nm] = b[nm] * 9 // 10
         refused(lambda b=b: Groth16(F.Fp(Sym(0)), vk, b=b), f'the loop state {nm} exceeds its bound')
+    q2, t0 = B.g2_mul(B.G2_GEN, 7), B.multi_miller_loop_affine([(B.G1_GEN, B.G2_GEN)])
+    for nm in (*PF.STATE, 'qz'):  # and the check for two fixed points of G2
+        b = dict(PF.bounds())
+        b[nm] = b[nm] * 9 // 10
+        refused(lambda b=b: PF.FixedCheck(F.Fp(Sym(0)), B.G2_GEN, q2, t0, b), f'the loop state {nm} exceeds its bound')
     print('loop bounds that do not hold are refused')
     # projections
     be = Sym(0)

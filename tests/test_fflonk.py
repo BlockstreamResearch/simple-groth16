@@ -9,8 +9,8 @@ generated from agrees with it, and no two witness nodes hold the same value.  Th
 one given), the program bound to the transaction runs in hand: the honest witness at the estimated cost,
 the witness padded for a larger program, whose budget must cover its cost, and tampered witnesses, which
 must be rejected: an evaluation, a challenge word, a public input, an inverse hint, a column word, the
-fixed-base scalar, an MSM hint, the pairing's G1 slot or its G2 slot, and, in Keccak mode, a valid proof
-for another sighash.  `quick` skips the programs.
+fixed-base scalar, an MSM hint, either point of the pairing check, and, in Keccak mode, a valid proof for
+another sighash.  `quick` skips the programs.
 
 The padding also runs as a program of its own: blocks of zeros pass at the predicted cost whichever groups
 are taken, each block at the same cost, and a taken group with a word that is not 0 is rejected: 1, or
@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import harness
 
 from groth.core import bn254 as B
-from groth.core import pairing as PC
+from groth.core import pairing_fixed as PF
 from groth.core import snarkjs
 from groth.core.dsl import CheckFailed
 from groth.core.fp import N_SECP, P_SECP, Fp
@@ -68,7 +68,7 @@ def reference():
         assert w is not None and len(w['inv']) == FF.N_INV_FIXED + max(1, VK['nPublic'])
         # no two witness nodes hold the same value: the encoding of a program with its witness must share
         # every repeated node, and deploy encodes the unpruned program, where they would be two
-        g = FF.Fflonk(Fp(Num()), VK, m, True, PC.bounds())
+        g = FF.Fflonk(Fp(Num()), VK, m, True, PF.bounds())
         values = [
             json.dumps(v, sort_keys=True) for v in g.witness_value(g.witness(PROOFS[m], PUB, DUMMY_SIGHASH)).values()
         ]
@@ -93,14 +93,9 @@ def tampered(g, w):
     case('a column word', lambda w2: w2['cols'].__setitem__(1, w2['cols'][1] ^ 4))
     case('the fixed-base scalar', lambda w2: w2.__setitem__('v', (w2['v'] + 1) % B.R))
     case('an MSM hint', lambda w2: w2['var']['steps'][40][1].__setitem__(0, (w2['var']['steps'][40][1][0] + 1) % B.P))
-    case('the G1 slot', lambda w2: w2['pairing']['points'].__setitem__(1, w2['pairing']['points'][1] ^ 1))
-    g2 = B.g2_mul(B.G2_GEN, 5)
-    case(
-        'the G2 slot',
-        lambda w2: w2['pairing']['points'].__setitem__(
-            slice(2, 6), [PC.to_mont(x) for x in (g2[0].c0, g2[0].c1, g2[1].c0, g2[1].c1)]
-        ),
-    )
+    flip = lambda i: lambda w2: w2['pairing']['points'].__setitem__(i, w2['pairing']['points'][i] ^ 1)
+    case("the pairing's point P1", flip(1))  # -(A1 - C0): no longer the MSM's result
+    case("the pairing's point P2", flip(2))  # W2: no longer on the curve
     return out
 
 

@@ -14,10 +14,11 @@ The program checks what snarkjs's fflonkVerify checks (reference.py is its plain
               GLV columns with runtime tables for the four proof points, windows of constant tables
               for G1).  The prover gives the column words and the canonical v = -e; the program
               checks them against the scalars in F_r.
-  pairing     e(-A1, [1]_2) e(W2, [x]_2) = 1 by pairing.py's polynomial identity, with
-              e(-C0, [1]_2) moved into its constant: the pairs are (-(A1 - C0), [1]_2) and (W2, [x]_2).
-              The identity's first G2 point is a witness slot for a variable point (Groth16's B), here
-              checked equal to [1]_2; the program checks the G1 slots against the MSM's result and W2.
+  pairing     e(-A1, [1]_2) e(W2, [x]_2) = 1 by the polynomial identity for two fixed points of G2
+              (pairing_fixed.py), with e(-C0, [1]_2) moved into its constant: the pairs are (-(A1 - C0),
+              [1]_2) and (W2, [x]_2).  The lines of [1]_2 and [x]_2 are constants of the program; its
+              witness has the two points of G1, and the program checks the first against the MSM's
+              result and takes W2 from the second.
 
 The opening is written once over an abstract field (`opening`), so the prover computes the hints with
 the same code the program is generated from.  Its formulas are snarkjs's, simplified: the products over
@@ -29,9 +30,9 @@ Binding (bind=True): the first two public inputs are the sighash of the spending
 follows this convention.
 
 Witness: w_in holds the public inputs, C1 C2 W1, the evaluations, the 5 challenge words, the inverse
-hints, the 8 column words, v, then the pairing check's part (pairing.witness_shape: its G1 slots hold
--(A1 - C0) and W2, in Montgomery form).  The MSM's hints (wv*, wf*, wz), the pairing check's leaves and
-Q, and the padding (wpsel, wpad0 .. wpad8) are witness nodes of their own.
+hints, the 8 column words, v, then the pairing check's part (pairing_fixed.witness_shape: its points are
+-(A1 - C0) and W2, in Montgomery form).  The MSM's hints (wv*, wf*, wz), the pairing check's committed
+values and Q, and the padding (wpsel, wpad0 .. wpad8) are witness nodes of their own.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from typing import Any
 
 from ..core import bn254 as B
 from ..core import msm as M
-from ..core import pairing
+from ..core import pairing_fixed
 from ..core.binding import limbs_check, sighash_limbs
 from ..core.budget import budget_ok
 from ..core.curve import Curve
@@ -49,7 +50,8 @@ from ..core.dsl import CheckFailed, Tbalanced, WSpec, ensure, wbalanced, wpair, 
 from ..core.fp import FR, WORD_MAX, Fp, Val
 from ..core.frprog import FrDag, FrInts
 from ..core.keccak import Keccak
-from ..core.pairing import KB, PairingCheck
+from ..core.pairing import F_HI, KB
+from ..core.pairing_fixed import FixedCheck
 from ..core.sym import SHA_CTX_W, E, Sym, words
 from . import reference as ref
 
@@ -228,7 +230,7 @@ def _W(ws: Sequence[int]) -> WSpec:
 class Fflonk:
     """Generator of the verifier of a snarkjs fflonk key (snarkjs.fflonk_key), for the transcript `mode`
     ('keccak' or 'sha256').  bind: the first two public inputs are the sighash (see the module's
-    docstring).  b: pairing.bounds()."""
+    docstring).  b: pairing_fixed.bounds()."""
 
     def __init__(
         self, fp: Fp, vk: dict[str, Any], mode: str = 'keccak', bind: bool = False, b: dict[str, int] | None = None
@@ -242,7 +244,7 @@ class Fflonk:
         ensure(self.n >= (2 if bind else 1), 'public inputs: at least 1, and 2 for the binding')
         self.n_inv = N_INV_FIXED + max(1, self.n)
         const = B.multi_miller_loop_affine([(B.g1_neg(vk['C0']), B.G2_GEN)])
-        self.pc = PairingCheck(fp, vk['X_2'], const, [B.Fp12.one()], b)
+        self.pc = FixedCheck(fp, B.G2_GEN, vk['X_2'], const, b)
         self.g1 = M.G1(fp)
         self.var = M.VarMsm(fp, prefix='wv')
         self.fixed = M.FixedMsm(fp, prefix='wf', extra=M.var_offset())
@@ -259,16 +261,16 @@ class Fflonk:
             words(self.n_inv),
             words(8),
             E('', 256, 0),
-            pairing.witness_shape(),
+            pairing_fixed.witness_shape(),
         ]
 
     def witness_type(self) -> str:
         pts = Tbalanced([_T(2)] * 3)
         parts = [_T(self.n), pts, _T(len(EVALS)), _T(len(CHALLENGES)), _T(self.n_inv), _T(8), '2^256']
-        return Tbalanced(parts + [pairing.witness_type()])
+        return Tbalanced(parts + [pairing_fixed.witness_type()])
 
     def witness_bits(self) -> int:
-        return 256 * (self.n + 6 + len(EVALS) + len(CHALLENGES) + self.n_inv + 8 + 1) + pairing.witness_bits()
+        return 256 * (self.n + 6 + len(EVALS) + len(CHALLENGES) + self.n_inv + 8 + 1) + pairing_fixed.witness_bits()
 
     def witness(self, proof: dict[str, Any], pub: Sequence[int], sighash: bytes | int | None = None) -> dict[str, Any]:
         """The witness of a proof (snarkjs.fflonk_proof) for the public inputs, or CheckFailed.  With a
@@ -281,7 +283,7 @@ class Fflonk:
             assert sighash is not None
             ensure(list(pub[:2]) == sighash_limbs(sighash), 'the first two public inputs are not the sighash')
         p_slot = M.neg(w['S'])
-        w['pairing'] = self.pc.prover.witness([(p_slot, B.G2_GEN), (w['W2'], self.vk['X_2'])], [])
+        w['pairing'] = self.pc.prover.witness([p_slot, w['W2']])
         ensure(w['pairing'] is not None, 'pairing witness')
         return w
 
@@ -310,9 +312,9 @@ class Fflonk:
             _W([FR.to_mont(x) for x in w['inv']]),
             _W(w['cols']),
             wv(256, w['v']),
-            pairing.witness_value(w['pairing']),
+            pairing_fixed.witness_value(w['pairing']),
         ]
-        nodes = {'w_in': wbalanced(main), **pairing.witness_nodes(w['pairing'])}
+        nodes = {'w_in': wbalanced(main), **pairing_fixed.witness_nodes(w['pairing'])}
         nodes.update(var_nodes(w['var']))
         for j, h in enumerate(w['fix']['hints']):
             nodes[f'wf{j}'] = _W(M.mont(h))
@@ -389,7 +391,7 @@ class Fflonk:
             + [tm(w, 2**M.HALF_BITS - 1) for w in cols]
             + [tm(v, R - 1)]
         )
-        hints = [Val(w, pairing.F_HI) for w in inv]
+        hints = [Val(w, F_HI) for w in inv]
         top2 = [self.g1.top2(w) for w in inv]
 
         def body(a):
@@ -409,17 +411,15 @@ class Fflonk:
         return be.checks(top2 + [fr.scope(vals + hints, body)])
 
     def msm(self, pts: Any, cols: Any, v: Any, slots: Any) -> E:
-        """A1 - C0 from the points and the words, against the pairing's first G1 slot (its negation); the
-        proof's points on the curve; the slot B = [1]_2."""
+        """A1 - C0 from the points and the words, against the pairing's first point (its negation); the
+        proof's points on the curve."""
         fp, be, cv = self.fp, self.be, self.cv
-        g2 = [B.G2_GEN[0].c0, B.G2_GEN[0].c1, B.G2_GEN[1].c0, B.G2_GEN[1].c1]
-        b_slot = [be.verify(be.eq256(w, be.word(M.to_mont(x)))) for w, x in zip(slots[2:6], g2)]
         mont = lambda w: fp.to_mont(Val(w, P - 1))
         norm = lambda w: fp.normalize(Val(w, WORD_MAX))
         vals = [
             [[mont(x), mont(y)] for x, y in pts],
-            [norm(slots[6]), norm(slots[7])],  # W2
-            [norm(slots[0]), norm(slots[1])],  # the slot -(A1 - C0)
+            [norm(slots[2]), norm(slots[3])],  # W2
+            [norm(slots[0]), norm(slots[1])],  # -(A1 - C0)
             [Val(w, WORD_MAX) for w in cols],
             Val(v, WORD_MAX),
         ]
@@ -438,11 +438,11 @@ class Fflonk:
 
             return be.checks(on_curve + col_checks + [be.let([s], cmp)])
 
-        return be.checks(b_slot + [fp.scope(vals, body)])
+        return fp.scope(vals, body)
 
     def pairing(self, pw: Any) -> E:
         (pts, ac), rz = pw
-        return self.pc.program({'x': [], 'words': []}, pts, ac, rz)
+        return self.pc.program(pts, ac, rz)
 
     def binding(self, pub: Any) -> E:
         """The first two public inputs are the high and low halves of the sig_all_hash jet's sighash."""
@@ -454,7 +454,7 @@ class Fflonk:
     ) -> tuple[str, Fflonk, int]:
         """The verifier of a key: (program text, its generator, cost bound in mWU)."""
         be = Sym(0)
-        g = cls(Fp(be), vk, mode, bind, b or pairing.bounds())
+        g = cls(Fp(be), vk, mode, bind, b or pairing_fixed.bounds())
         body = g.program()
         be.em.define('w_in', 'witness', f'_ -> {g.witness_type()}')
         be.em.define('main', f'comp w_in ({body.t})')
@@ -483,13 +483,13 @@ def var_nodes(w: dict[str, Any], prefix: str = 'wv') -> dict[str, WSpec]:
 
 
 # ---------------------------------------------------------------------------------------------------
-# Padding.  The input's budget is 1,000 mWU per byte of its witness stack, and the verifier costs more
-# than its program and witness weigh, so a spend pads its witness with blocks of zeros.  How many depends on
-# the pruned program's size, known at spend time, so the program offers groups of 1, 2, 4, ... 256
-# blocks of 512 bytes, each behind a case on a bit of the witness word `wpsel`: a group not taken is
-# pruned, and leaves only its commitment.  A block is 16 words checked to be 0, which also fixes the
-# block's type (a witness value whose type nothing constrains would not survive decoding).  wpsel's 16
-# bits are all read: bits 0 .. 8 select the groups, bits 9 .. 15 must be 0.
+# Padding.  The input's budget is 1,000 mWU per byte of its witness stack.  Where the verifier costs more
+# than its program and witness weigh (with the Keccak transcript it does), a spend pads its witness with
+# blocks of zeros.  How many depends on the pruned program's size, known at spend time, so the program
+# offers groups of 1, 2, 4, ... 256 blocks of 512 bytes, each behind a case on a bit of the witness word
+# `wpsel`: a group not taken is pruned, and leaves only its commitment.  A block is 16 words checked to
+# be 0, which also fixes the block's type (a witness value whose type nothing constrains would not
+# survive decoding).  wpsel's 16 bits are all read: bits 0 .. 8 select the groups, bits 9 .. 15 must be 0.
 #
 # The words are checked where they lie.  A group is a balanced tree of words, so its lowest nodes are
 # pairs of words, and PADW checks one pair with three jets applied in place: the two words are equal

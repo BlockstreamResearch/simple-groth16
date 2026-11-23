@@ -17,11 +17,11 @@ A Python generator compiles a snarkjs verification key into a Simplicity program
 | circom circuits | bound by a Merkle root of the public values | bound by the sighash as two public inputs |
 | Noir circuits ([docs](docs/noir.md)) | bound by the sighash as the first public input | should work, with the sighash as two inputs (untested) |
 | proofs | snarkjs `groth16` | snarkjs `fflonk` (Keccak-256 transcript), or `tools/snarkjs_sha256.mjs` (SHA-256 transcript) |
-| cost, toy circuit | 47.7 M mWU (circom), 54.3 M mWU (Noir) | 122.1 M mWU (SHA-256), 170.9 M mWU (Keccak), before padding |
-| spending transaction | 50.7 kWU (circom), 64.9 kWU (Noir) | 124.2 kWU (SHA-256), 175.3 kWU (Keccak) |
+| cost, toy circuit | 47.7 M mWU (circom), 54.3 M mWU (Noir) | 104.0 M mWU (SHA-256), 152.8 M mWU (Keccak), before padding |
+| spending transaction | 50.7 kWU (circom), 64.9 kWU (Noir) | 110.9 kWU (SHA-256), 156.3 kWU (Keccak) |
 | spent on | Elements regtest and Liquid testnet | Elements regtest and Liquid testnet |
 
-Every transaction fits under the 400 kWU standard limit. A spend's budget is 1,000 mWU per byte of the input's witness stack (the program and its witness), plus 50,000, and the Groth16 programs earn more budget than they cost. The fflonk program costs more, so its spends pad the witness to pay for it.
+Every transaction fits under the 400 kWU standard limit. A spend's budget is 1,000 mWU per byte of the input's witness stack (the program and its witness), plus 50,000, and the Groth16 programs earn more budget than they cost, as does the fflonk program with the SHA-256 transcript. With Keccak the fflonk program costs more, so its spends pad the witness to pay for it.
 
 Each binding ties the proof to the transaction that spends the output: the program reads that transaction's signature hash (`sig_all_hash`) and compares it with the proof's public inputs. A broadcast proof therefore cannot be replayed or redirected.
 
@@ -33,7 +33,7 @@ Simplicity has jets for SHA-256 and for arithmetic modulo the secp256k1 primes, 
 - **Hints instead of inversions.** The prover puts every slope and inverse in the witness. The program checks each one with a multiplication, such as `λ (x2 - x1) = y2 - y1` for an addition.
 - **The pairing as one polynomial identity.** The prover writes the Miller loop's intermediate values into the witness. The program checks all 88 steps at once, at one random point chosen by hashing the witness (Fiat–Shamir with SHA-256). A [residue witness](https://eprint.iacr.org/2024/640) replaces the final exponentiation.
 - **The key compiled in.** For Groth16, δ's lines are constants. γ and the IC points become tables of pairing values selected by the public inputs' bits, so the inputs' combination L = IC_0 + Σ x_i IC_i is never computed.
-- **fflonk** reuses the arithmetic and the pairing check. It adds a Keccak-256 transcript, F_r arithmetic for the opening, and a G1 multi-scalar multiplication with hints.
+- **fflonk** reuses the arithmetic and the pairing identity, with both of its G2 points constants of the key. It adds a Keccak-256 transcript, F_r arithmetic for the opening, and a G1 multi-scalar multiplication with hints.
 
 Each verifying key gives its own program (2.8 MB of Simplicity text for the toy circuit), so the repository has no hand-written Simplicity. The tools write the programs into `build/`. The [Groth16 document](docs/groth16.md) explains the method, and [benchmarks](docs/benchmarks.md) has the numbers.
 
@@ -130,7 +130,7 @@ The proof binds the spending transaction, fee included, so the fee is fixed befo
 
 Nothing is sent without `--broadcast`. The transaction is printed, or written with `--out`. `deploy` executes it first, and refuses a transaction whose cost its budget does not cover, that needs more Bit Machine cells than consensus allows, or that is above the standard weight. With `--node`, testmempoolaccept checks it as well. `python3 tools/liquid.py --help` has every command, including `keyspend` and `broadcast`.
 
-Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 4,400 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
+Fund the verifier with an explicit output of L-BTC, which pays the fee. Its address is unconfidential, so a wallet that pays it writes the amount in the clear, which the program's sighash needs. A wallet that pays only confidential addresses can pay `deploy wallet`'s address instead, and `deploy send` then moves the coins to the verifier. At 0.1 sat/vB the fee is about 1,300 sat for the Groth16 toy spend and 3,900 sat for fflonk with Keccak. Each toy verifier has been spent this way on Liquid testnet ([docs/benchmarks.md](docs/benchmarks.md) lists the transactions).
 
 > ⚠️ The toy statements are public: anyone can prove a·b = c for their own transaction. Once your funding transaction is seen, anyone can race you to the output. Fund a toy verifier on Liquid only with what you would give away. A verifier for your own circuit is as safe as that circuit's statement and setup.
 
@@ -150,13 +150,15 @@ The program checks only the binding input. The spender chooses every other publi
 
 With Groth16, the program can pin a public signal instead: `--fix K=VALUE`, on `program` and on `witness`, makes signal K (counted from 0, as `public.json` lists them) equal to VALUE in every proof the program accepts. The signal is compiled into the key, so it is no verifier input and costs nothing. This suits signals that are constants of a deployment, such as the hash of the program a wrapper circuit proves. The binding then applies to the signals that are left ([docs/groth16.md](docs/groth16.md)).
 
+The Groth16 signal itself can be shorter: `--signal-bits N` keeps the low N bits of the root or sighash, N a multiple of 8 from 184 to 248, with `PublicMerkleRootBits(n, N)` in the circuit. The toy spend then weighs 47.6 kWU at 200 bits instead of 50.7. It leaves less margin against two transactions with the same signal (2^100 work at 200 bits, where 253 bits give 2^126), which matters when someone other than the prover has a say in the transaction; [docs/groth16.md](docs/groth16.md) explains the trade.
+
 A circuit that follows none of these conventions needs `--unbound`. Each of its public signals is then a verifier input; with Groth16, each costs about 6 M mWU and 12 to 14 kB. Nothing binds the proof to the transaction: anyone who sees the spend can reuse its witness in another transaction to the same output.
 
 ## Repository
 
 | | |
 |---|---|
-| `groth/core/` | what both verifiers use: `bn254.py` (the plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py` (F_p and F_r), `poly.py`, `curve.py`, `pairing.py`, `msm.py`, `frprog.py` (F_r straight-line code), `keccak.py`, `snarkjs.py` (snarkjs's files), `binding.py` (the transaction bindings), `budget.py` |
+| `groth/core/` | what both verifiers use: `bn254.py` (the plain-Python reference), `sym.py` and `dsl.py` (the two backends and the Simplicity text), `fp.py` (F_p and F_r), `poly.py`, `curve.py`, `pairing.py` and `pairing_fixed.py` (the pairing check, and the one for two fixed G2 points), `msm.py`, `frprog.py` (F_r straight-line code), `keccak.py`, `snarkjs.py` (snarkjs's files), `binding.py` (the transaction bindings), `budget.py` |
 | `groth/groth16/` | the Groth16 verifier |
 | `groth/fflonk/` | the fflonk verifier, and `reference.py`, a port of snarkjs's fflonk verifier |
 | `circuits/` | `public_merkle.circom` (the Merkle binding), the toy `multiplier.circom`, `multiplier_fflonk.circom` for fflonk, and `noir/multiplier`, the toy statement in Noir |

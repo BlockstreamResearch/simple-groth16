@@ -69,6 +69,9 @@ gets rho and z as witness words and compares them with the two hashes at the end
 
 `relations` is written once over an abstract ring: the prover runs it on polynomials to get S and Q,
 the tests run it on numbers to compare with the program.
+
+pairing_fixed.py is the same identity for a check whose two points of G2 are both fixed (fflonk's): the
+lines of both are constants, and no slope is committed.
 """
 
 from __future__ import annotations
@@ -289,14 +292,21 @@ def relations(
         x, y = x2, R.sub(m, R.mul(lam, x2))
     rels.append(R.sub(x, phi(xb.conj() * bn254.FROB3[2])))
     rels.append(R.sub(y, phi(yb.conj() * -bn254.FROB3[3])))
-    # u pi(c'^-1) pi^2(c') pi^3(c'^-1) = tau, with pi^n(c') = (a(t_n) + t_n) / (a(t_n) - t_n)
+    rels.append(last_relation(R, v, N, D))
+    return rels
+
+
+def last_relation(R: Ring, v: dict[str, Any], N: Any, D: Any) -> Any:
+    """u pi(c'^-1) pi^2(c') pi^3(c'^-1) = tau for u = N / D after the loop, as a fraction's numerator: with
+    pi^n(c') = (a(t_n) + t_n) / (a(t_n) - t_n) for a = v['ac'], and tau = (a_t + w) / (a_t - w) for a_t =
+    v['tau']."""
+    X = R.X
     t = [frob_w(R, n) for n in (1, 2, 3)]
     a = [frob_even(R, v['ac'], n) for n in (1, 2, 3)]
     at = R.even(v['tau'])
     num = R.mul(R.mul(R.mul(R.mul(N, R.sub(a[0], t[0])), R.add(a[1], t[1])), R.sub(a[2], t[2])), R.sub(at, X))
     den = R.mul(R.mul(R.mul(R.mul(D, R.add(a[0], t[0])), R.sub(a[1], t[1])), R.add(a[2], t[2])), R.add(at, X))
-    rels.append(R.conj_sub(num, den))
-    return rels
+    return R.conj_sub(num, den)
 
 
 def frob_w(R: Ring, n: int) -> Any:
@@ -402,14 +412,32 @@ def q_words(deg: int) -> int:
 # steps, as many as each step's relation leaves room for under the degree cap.  A factor multiplied in
 # before k more doublings is the 2^k-th root of what it must contribute, which exists: the factors lie in
 # the group of order r.
-W_BITS, TOP_LO = 8, 248
+#
+# An input known to be shorter (the Groth16 verifier's bound signal, when it is a hash cut to fewer bits)
+# has windows for its own bits only, the top one with what is left of them.  The program must then check
+# that the input has no bit above: the tables do not read those.
+W_BITS, INPUT_BITS = 8, 254
 
 
-def windows(n: int) -> list[Window]:
-    """(input, lowest bit, width) of the windows of n inputs, the top one of the first input first."""
-    out = [(0, TOP_LO, 254 - TOP_LO)] if n else []
-    for i in range(n):
-        out += [(i, lo, W_BITS) for lo in range(0, TOP_LO, W_BITS)] + ([(i, TOP_LO, 254 - TOP_LO)] if i else [])
+def input_bits(n: int | Sequence[int]) -> tuple[int, ...]:
+    """The bit lengths of the inputs: of n whole inputs, or those given."""
+    bits = (INPUT_BITS,) * n if isinstance(n, int) else tuple(n)
+    ensure(all(1 <= b <= INPUT_BITS for b in bits), 'an input has 1 to 254 bits')
+    return bits
+
+
+def windows(n: int | Sequence[int]) -> list[Window]:
+    """(input, lowest bit, width) of the windows of the inputs (their number, or their bit lengths), the
+    top one of the first input first."""
+    bits = input_bits(n)
+
+    def top(i: int) -> Window:
+        lo = (bits[i] - 1) // W_BITS * W_BITS
+        return (i, lo, bits[i] - lo)
+
+    out = [top(0)] if bits else []
+    for i in range(len(bits)):
+        out += [(i, lo, W_BITS) for lo in range(0, top(i)[1], W_BITS)] + ([top(i)] if i else [])
     return out
 
 
@@ -432,13 +460,15 @@ def add_capacities(cap: int) -> dict[int, int]:
     return room
 
 
-_PLANS: dict[int, tuple[int, Window | None, dict[int, list[Window]]]] = {}
+_PLANS: dict[tuple[int, ...], tuple[int, Window | None, dict[int, list[Window]]]] = {}
 
 
-def window_plan(n: int) -> tuple[int, Window | None, dict[int, list[Window]]]:
+def window_plan(n: int | Sequence[int]) -> tuple[int, Window | None, dict[int, list[Window]]]:
     """(the degree of S, the window merged with the end's constant or None, step -> its windows) for n
-    public inputs: the steps with the most room first, so that few steps carry windows, under the cap
-    DEG_S, or under a higher one if the windows need it (more inputs; Q grows with it)."""
+    public inputs (or inputs of the bit lengths n): the steps with the most room first, so that few steps
+    carry windows, under the cap DEG_S, or under a higher one if the windows need it (more inputs; Q grows
+    with it)."""
+    n = input_bits(n)
     if n not in _PLANS:
         wins = windows(n)
         top = wins[0] if n else None
@@ -571,14 +601,19 @@ class Prover:
     """The witness for the pairs (-A, B), (C, delta) and the public inputs' term: gt = gt_constants(ic,
     gamma) (K_0 .. K_n for n inputs); const is the Miller value of (alpha, beta).  The tables: for each
     window, the compressed E-images of its factors by digit, and the end's constants (tau) by the digit of
-    the window merged with them."""
+    the window merged with them.  bits: the bit lengths of the inputs, if some are shorter than a whole
+    input."""
 
-    def __init__(self, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12]) -> None:
+    def __init__(
+        self, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12], bits: Sequence[int] | None = None
+    ) -> None:
         self.lines = fixed_lines(delta)
         self.const, self.gt, self.n = const, gt, len(gt) - 1
-        deg, self.top, self.plan = window_plan(self.n)
+        self.bits = input_bits(self.n if bits is None else bits)
+        ensure(len(self.bits) == self.n, 'a bit length for each public input')
+        deg, self.top, self.plan = window_plan(self.bits)
         self.n_q = q_words(deg)
-        offset = [sum(1 << lo for i2, lo, _ in windows(self.n) if i2 == i) for i in range(self.n)]
+        offset = [sum(1 << lo for i2, lo, _ in windows(self.bits) if i2 == i) for i in range(self.n)]
         inv2 = pow(2, -1, bn254.R)
         # a window at step s: digit d multiplies in K_i^((d + 1) 2^lo / 2^k), k the doublings after s
         self.expo = {
@@ -642,6 +677,7 @@ class Prover:
         E(c) and E(f), so s is not needed."""
         (nA, B), (C, _) = pairs
         ensure(len(inputs) == self.n and all(0 <= x < bn254.R for x in inputs), 'public inputs')
+        ensure(all(x >> b == 0 for x, b in zip(inputs, self.bits)), 'a public input is longer than its bits')
         res = residue or bn254.residue_witness(self.product(pairs, inputs))
         if res is None:
             return None
@@ -723,58 +759,18 @@ CORE = ('N', 'D', 'se', 'x', 'y')  # what every step changes
 STATE = (*CORE, 'so')
 
 
-class PairingCheck:
-    """Generator of the check over a backend.  delta: the fixed G2 point; const: the Miller value of
-    (alpha, beta); gt: gt_constants of the IC points and gamma; b: the bounds of the loop state
-    (bounds())."""
+class Parts:
+    """What the generators of the check share (PairingCheck here, pairing_fixed.FixedCheck for two fixed
+    points of G2): the field helpers, the checks of the committed words, the transcript's hashing, and
+    the functions QCHUNK and EVAL.  A generator sets fp, be, b (the bounds of its loop state), and
+    defines TOP2, QCHUNK and EVAL."""
 
-    def __init__(
-        self, fp: Fp, delta: bn254.G2Point, const: bn254.Fp12, gt: Sequence[bn254.Fp12], b: dict[str, int] | None = None
-    ) -> None:
-        ensure(additions_avoid_q(STEPS), 'an addition of the loop can meet T = Q')
-        self.fp, self.be, self.cv = fp, fp.be, Curve(fp)
-        self.prover = pr = Prover(delta, const, gt)
-        # per step, the line constants of delta: c3 and c4, two Montgomery words each
-        self.data = [[to_mont(a % P) for cf in pr.lines[i] for a in (cf.c0, cf.c1)] for i in range(N_STEPS)]
-        mont6 = lambda a: [[to_mont(x) for x in a[:4]], [to_mont(x) for x in a[4:]]]
-        mont4 = lambda b: [[to_mont(x) for x in (b[0].c0, b[0].c1, b[1].c0, b[1].c1)]]  # one wide constant
-        self.win_tables = {key: [mont4(b) for b in tab] for key, tab in pr.tables.items()}
-        self.tau_table = [mont6(a) for a in pr.taus]
-        self.ins = sorted({i for wins in pr.plan.values() for i, _, _ in wins})  # inputs read in the loop
-        self.run_rest = RUN_FIELD + [f'in{i}' for i in self.ins]
-        self.run = RUN_STEP + self.run_rest
-        self.b = dict(b) if b is not None else {}
-        if not self.b:
-            ensure(not is_sym(self.be), 'the bounds are computed with the numeric backend')
-            self.sample_bounds()
-        be = self.be
-        self.TOP2 = be.function('TOP2', [words(4), words(2)], lambda a: be.checks([self.top2_zero(w) for w in flat(a)]))
-        self.steps: dict[tuple[str, bool], Any] = {}
-        for kind, args in (('D', None), ('A', words(4)), ('F', words(4))):
-            for commit in sorted({COMMIT[k] for k in range(N_STEPS) if self.fn_of(k)[0] == kind}):
-                st = self.state_shape(run_rest=False, commit=commit)
-                shape = [[st, leaf_shape(commit)], words(4) if args is None else [args, words(4)]]
-                name = f'STEP_{kind}' + ('' if commit else '_')
-                self.steps[(kind, commit)] = be.function(name, shape, self.step_body(kind, commit))
-        self.QCHUNK = be.function('QCHUNK', [[words(2), words(7)], words(8)], self.qchunk_body)
-        # the step functions and QCHUNK take the loop state within these bounds and must give it back within
-        # them (sample_bounds found them so; a stale or hand-made bounds dict must not slip through)
-        for nm in (*STATE, 'qz'):
-            ensure(self.b.get(nm + '_out', 0) <= self.b[nm], f'the loop state {nm} exceeds its bound')
-        self.EVAL = be.function('EVAL', [[words(4), words(2)], E('', 256, 0)], self.eval_body)
-        self.T6 = be.function('T6', [words(4), words(4)], self.t6_body) if pr.plan else None
-        if is_sym(be):
-            self.costs = {
-                fn.t: fn.c
-                for fn in list(self.steps.values()) + [self.QCHUNK, self.EVAL] + ([self.T6] if self.T6 else [])
-            }
-
-    @staticmethod
-    def fn_of(k: int) -> tuple[str, bool]:
-        """(function kind, commit) of step k.  A Frobenius addition with a committed value runs the addition's
-        function with g = 1, which saves a function."""
-        kind = STEPS[k][0]
-        return ('A' if kind == 'F' and COMMIT[k] else kind), COMMIT[k]
+    fp: Fp
+    be: Any
+    b: dict[str, int]
+    TOP2: Any
+    EVAL: Any
+    QCHUNK: Any
 
     def one(self) -> Val:
         return self.fp.const(1)
@@ -829,6 +825,131 @@ class PairingCheck:
             if is_sym(be)
             else int.from_bytes(hashlib.sha256(h).digest(), 'big')
         )
+
+    def qchunk_body(self, accs: Any) -> Term:
+        """Body of QCHUNK: ((qz, z^16), (z^2, z^4 .. z^14)), 8 words of Q -> qz z^16 + their polynomial at
+        z^2.  Q(z) = z Q'(z^2), and Q'(z^2) is this step from the top chunk down; the words are checked
+        below 2^254."""
+        ((qz, z16), zp), q = accs
+        one, b = self.one(), self.b
+        out = self.rd(
+            [(Val(qz, b['qz']), Val(z16, KB)), (Val(q[0], F_HI), one)]
+            + [(Val(q[k], F_HI), Val(zp[k - 1], KB)) for k in range(1, 8)]
+        )
+        b['qz_out'] = max(b.get('qz_out', 0), out.hi)
+        return self.be.seq(self.be.checks([self.top2_zero(w) for w in q]), out.e)
+
+    def eval_body(self, accs: Any) -> Term:
+        """Body of EVAL: ((a_0 .. a_3, a_4 a_5), t^2) -> a(t) = sum a_k t^2k by Horner, for an element a of F_p6
+        (words below 2^254: committed words, or constants) and t^2 below KB."""
+        a, t2 = accs
+        a = flat(a)
+        t2 = Val(t2, KB)
+        acc = Val(a[5], F_HI)
+        for k in range(4, -1, -1):
+            # the inner terms join after the reduction; the last one inside it, so that a(t) is reduced
+            acc = (
+                self.rd([(acc, t2), (Val(a[k], F_HI), self.one())])
+                if k == 0
+                else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
+            )
+        self.eval_hi = acc.hi
+        return acc.e
+
+    def eval_at(self, coeffs: Any, t2: Val) -> Val:
+        """a(t) for the 6 words of a (projected, one subtree, 4 + 2 words; or a constant) and t^2, by EVAL."""
+        t2 = t2 if t2.hi <= KB else self.fp.normalize(t2)
+        be = self.be
+        a: Any
+        if not is_sym(be):
+            a = [[x.e if isinstance(x, Val) else x for x in g] for g in coeffs]
+        elif isinstance(coeffs, E):
+            a = coeffs
+        else:
+            a = be.subtree([v.e for v in flat(coeffs)])
+        return Val(be.call(self.EVAL, [a, t2.e]), self.eval_hi)
+
+    def q_value(self, q: Any, run: dict[str, Val]) -> Term:
+        """Q'(z^2) for Q in its hashing blocks, by QCHUNK from the top chunk down.  run: z^2 .. z^16."""
+        be = self.be
+        chunks = [half for blk in q for half in ([blk] if len(blk) == 8 else [blk[:8], blk[8:]])]
+        ensure(all(len(ch) == 8 for ch in chunks), 'Q is read in chunks of 8 words')
+        qz = be.word(0)
+        for ch in reversed(chunks):
+            zs = [run[f'z{k}'].e for k in range(2, 16, 2)]
+            qz = be.call(self.QCHUNK, [[[qz, run['z16'].e], zs], be.subtree(ch) if is_sym(be) else ch])
+        return qz
+
+    def challenges(self, h: Any, q: Any, rz: Any) -> list[Term]:
+        """r against the hash of the transcript h, and z against the hash of r and Q."""
+        be = self.be
+        r_hash = self.sha_final(h)
+        z_hash = self.sha_final(self.sha_add(self.sha_add(self.sha_init(), [rz[0]]), list(q)))
+        if not is_sym(be):
+            ensure(r_hash == rz[0] and z_hash == rz[1], 'challenge')
+            return []
+        return [be.verify(be.eq256(r_hash, rz[0])), be.verify(be.eq256(z_hash, rz[1]))]
+
+
+class PairingCheck(Parts):
+    """Generator of the check over a backend.  delta: the fixed G2 point; const: the Miller value of
+    (alpha, beta); gt: gt_constants of the IC points and gamma; b: the bounds of the loop state
+    (bounds()); bits: the bit lengths of the inputs, if some are shorter than a whole input.  The tables
+    do not read an input above its length, so the caller must check that it has no bit there."""
+
+    def __init__(
+        self,
+        fp: Fp,
+        delta: bn254.G2Point,
+        const: bn254.Fp12,
+        gt: Sequence[bn254.Fp12],
+        b: dict[str, int] | None = None,
+        bits: Sequence[int] | None = None,
+    ) -> None:
+        ensure(additions_avoid_q(STEPS), 'an addition of the loop can meet T = Q')
+        self.fp, self.be, self.cv = fp, fp.be, Curve(fp)
+        self.prover = pr = Prover(delta, const, gt, bits)
+        # per step, the line constants of delta: c3 and c4, two Montgomery words each
+        self.data = [[to_mont(a % P) for cf in pr.lines[i] for a in (cf.c0, cf.c1)] for i in range(N_STEPS)]
+        mont6 = lambda a: [[to_mont(x) for x in a[:4]], [to_mont(x) for x in a[4:]]]
+        mont4 = lambda b: [[to_mont(x) for x in (b[0].c0, b[0].c1, b[1].c0, b[1].c1)]]  # one wide constant
+        self.win_tables = {key: [mont4(b) for b in tab] for key, tab in pr.tables.items()}
+        self.tau_table = [mont6(a) for a in pr.taus]
+        self.ins = sorted({i for wins in pr.plan.values() for i, _, _ in wins})  # inputs read in the loop
+        self.run_rest = RUN_FIELD + [f'in{i}' for i in self.ins]
+        self.run = RUN_STEP + self.run_rest
+        self.b = dict(b) if b is not None else {}
+        if not self.b:
+            ensure(not is_sym(self.be), 'the bounds are computed with the numeric backend')
+            self.sample_bounds()
+        be = self.be
+        self.TOP2 = be.function('TOP2', [words(4), words(2)], lambda a: be.checks([self.top2_zero(w) for w in flat(a)]))
+        self.steps: dict[tuple[str, bool], Any] = {}
+        for kind, args in (('D', None), ('A', words(4)), ('F', words(4))):
+            for commit in sorted({COMMIT[k] for k in range(N_STEPS) if self.fn_of(k)[0] == kind}):
+                st = self.state_shape(run_rest=False, commit=commit)
+                shape = [[st, leaf_shape(commit)], words(4) if args is None else [args, words(4)]]
+                name = f'STEP_{kind}' + ('' if commit else '_')
+                self.steps[(kind, commit)] = be.function(name, shape, self.step_body(kind, commit))
+        self.QCHUNK = be.function('QCHUNK', [[words(2), words(7)], words(8)], self.qchunk_body)
+        # the step functions and QCHUNK take the loop state within these bounds and must give it back within
+        # them (sample_bounds found them so; a stale or hand-made bounds dict must not slip through)
+        for nm in (*STATE, 'qz'):
+            ensure(self.b.get(nm + '_out', 0) <= self.b[nm], f'the loop state {nm} exceeds its bound')
+        self.EVAL = be.function('EVAL', [[words(4), words(2)], E('', 256, 0)], self.eval_body)
+        self.T6 = be.function('T6', [words(4), words(4)], self.t6_body) if pr.plan else None
+        if is_sym(be):
+            self.costs = {
+                fn.t: fn.c
+                for fn in list(self.steps.values()) + [self.QCHUNK, self.EVAL] + ([self.T6] if self.T6 else [])
+            }
+
+    @staticmethod
+    def fn_of(k: int) -> tuple[str, bool]:
+        """(function kind, commit) of step k.  A Frobenius addition with a committed value runs the addition's
+        function with g = 1, which saves a function."""
+        kind = STEPS[k][0]
+        return ('A' if kind == 'F' and COMMIT[k] else kind), COMMIT[k]
 
     # one step
     @staticmethod
@@ -948,49 +1069,6 @@ class PairingCheck:
             return be.seq(self.top2_6(leaf[1]), new) if commit else new
 
         return body
-
-    def qchunk_body(self, accs: Any) -> Term:
-        """Body of QCHUNK: ((qz, z^16), (z^2, z^4 .. z^14)), 8 words of Q -> qz z^16 + their polynomial at
-        z^2.  Q(z) = z Q'(z^2), and Q'(z^2) is this step from the top chunk down; the words are checked
-        below 2^254."""
-        ((qz, z16), zp), q = accs
-        one, b = self.one(), self.b
-        out = self.rd(
-            [(Val(qz, b['qz']), Val(z16, KB)), (Val(q[0], F_HI), one)]
-            + [(Val(q[k], F_HI), Val(zp[k - 1], KB)) for k in range(1, 8)]
-        )
-        b['qz_out'] = max(b.get('qz_out', 0), out.hi)
-        return self.be.seq(self.be.checks([self.top2_zero(w) for w in q]), out.e)
-
-    def eval_body(self, accs: Any) -> Term:
-        """Body of EVAL: ((a_0 .. a_3, a_4 a_5), t^2) -> a(t) = sum a_k t^2k by Horner, for an element a of F_p6
-        (words below 2^254: committed words, or constants) and t^2 below KB."""
-        a, t2 = accs
-        a = flat(a)
-        t2 = Val(t2, KB)
-        acc = Val(a[5], F_HI)
-        for k in range(4, -1, -1):
-            # the inner terms join after the reduction; the last one inside it, so that a(t) is reduced
-            acc = (
-                self.rd([(acc, t2), (Val(a[k], F_HI), self.one())])
-                if k == 0
-                else self.rd_plus([(acc, t2)], Val(a[k], F_HI))
-            )
-        self.eval_hi = acc.hi
-        return acc.e
-
-    def eval_at(self, coeffs: Any, t2: Val) -> Val:
-        """a(t) for the 6 words of a (projected, one subtree, 4 + 2 words; or a constant) and t^2, by EVAL."""
-        t2 = t2 if t2.hi <= KB else self.fp.normalize(t2)
-        be = self.be
-        a: Any
-        if not is_sym(be):
-            a = [[x.e if isinstance(x, Val) else x for x in g] for g in coeffs]
-        elif isinstance(coeffs, E):
-            a = coeffs
-        else:
-            a = be.subtree([v.e for v in flat(coeffs)])
-        return Val(be.call(self.EVAL, [a, t2.e]), self.eval_hi)
 
     def sample_bounds(self) -> None:
         """The bounds of the loop state: a fixed point of the step bodies, found on the numeric backend by
@@ -1356,15 +1434,8 @@ class PairingCheck:
         run = {nm: Val(w, KB) for nm, w in zip(self.run, flat(run))}
         run.update({nm: Val(w, KB) for nm, w in zip(END, end) if nm in ('z12', 'z14', 'z16')})
         b = self.b
-        chunks = [half for blk in q for half in ([blk] if len(blk) == 8 else [blk[:8], blk[8:]])]
-        ensure(
-            len(blocks(self.prover.n_q)) == len(q) and all(len(ch) == 8 for ch in chunks),
-            'Q is read in chunks of 8 words',
-        )
-        qz = be.word(0)
-        for ch in reversed(chunks):
-            zs = [run[f'z{k}'].e for k in range(2, 16, 2)]
-            qz = be.call(self.QCHUNK, [[[qz, run['z16'].e], zs], be.subtree(ch) if is_sym(be) else ch])
+        ensure(len(blocks(self.prover.n_q)) == len(q), 'the blocks of Q')
+        qz = self.q_value(q, run)
         c = {nm: Val(w, b[nm]) for nm, w in zip(STATE, flat(st), strict=True)}
         c['qz'] = Val(qz, b['qz'])
         c.update({nm: Val(w, hi) for nm, w, hi in zip(END, end, self.end_hi, strict=True)})
@@ -1396,12 +1467,8 @@ class PairingCheck:
             return cv.zero_check(rd([(c['s'], one()), (c['qz'], c['nzm'])])).e
 
         identity = chain(fp, c, steps, check)
-        r_hash = self.sha_final(h)
-        z_hash = self.sha_final(self.sha_add(self.sha_add(self.sha_init(), [rz[0]]), list(q)))
-        if not is_sym(be):
-            ensure(r_hash == rz[0] and z_hash == rz[1], 'challenge')
-            return 0
-        return be.checks([identity, be.verify(be.eq256(r_hash, rz[0])), be.verify(be.eq256(z_hash, rz[1]))])
+        hashes = self.challenges(h, q, rz)
+        return be.checks([identity, *hashes]) if is_sym(be) else 0
 
     def program(self, inputs: dict[str, Any], pts: Any, ac: Any, rz: Any, leaves: Any = None, q: Any = None) -> Term:
         """The whole check.  inputs: {'x': the public inputs (accessors or Vals), 'words': their words for the

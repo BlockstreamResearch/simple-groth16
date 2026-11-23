@@ -17,21 +17,21 @@ Measured in `hand` on the toy circuit `circuits/multiplier_fflonk.circom` (3 pub
 | transcript | 0.3 M | 49.1 M | |
 | opening (F_r) | 6.0 M | 6.0 M | |
 | MSM | 73.4 M | 73.4 M | |
-| pairing check | 41.8 M | 41.8 M | |
+| pairing check | 23.8 M | 23.8 M | |
 | binding | 0.1 M | 0.1 M | |
-| **cost before padding** | **122.1 M mWU** | **170.9 M mWU** | **47.7 M mWU** |
-| pruned program | 65 kB | 75 kB | 34 kB |
-| witness, before padding | 42 kB | 42 kB | 16 kB |
+| **cost before padding** | **104.0 M mWU** | **152.8 M mWU** | **47.7 M mWU** |
+| pruned program | 75 kB | 84 kB | 34 kB |
+| witness, before padding | 36 kB | 36 kB | 16 kB |
 
-The verifier costs more than its program and witness weigh, so a spend pads its witness (below). The Elements regtest spends of `tools/regtest.sh`:
+A spend's budget is 1,000 mWU per byte of its program and witness. With the SHA-256 transcript the 110 kB earn more than the verifier costs. With Keccak the verifier costs more than its 119 kB earn, so a spend pads its witness (below). The Elements regtest spends of `tools/regtest.sh`:
 
 | | fflonk, SHA-256 | fflonk, Keccak | Groth16 |
 |---|---:|---:|---:|
-| padding | 31 blocks, 15.9 kB | 113 blocks, 57.9 kB | none |
-| cost with padding | 123.1 M mWU | 174.5 M mWU | 47.7 M mWU |
-| transaction | 124.2 kWU, 31.1 kvB | 175.3 kWU, 43.8 kvB | 50.7 kWU, 12.7 kvB |
+| padding | none | 71 blocks, 36.4 kB | none |
+| cost with padding | 104.0 M mWU | 155.1 M mWU | 47.7 M mWU |
+| transaction | 110.9 kWU, 27.7 kvB | 156.3 kWU, 39.1 kvB | 50.7 kWU, 12.7 kvB |
 
-A padded transaction weighs about its cost, 1 WU per 1,000 mWU, under the 400 kWU standard limit in both modes.
+A padded transaction weighs about its cost, 1 WU per 1,000 mWU, and one without padding about the bytes of its program and witness. Both modes stay under the 400 kWU standard limit.
 
 ## Using it
 
@@ -99,21 +99,25 @@ The eight columns form two groups of four. Each group has a table of the 8 sums 
 
 ### The pairing check
 
-The pairing check is `pairing.py`'s polynomial identity, unchanged. It was written for Groth16's e(-A, B) e(C, δ) e(α, β) = 1 with one variable G2 point, B. Here:
+fflonk checks e(-A1, [1]₂) e(W2, [x]₂) = 1, and both of its G2 points belong to the key. `groth/core/pairing_fixed.py` is the polynomial identity of `pairing.py` for that case. Groth16's check takes its first G2 point, B, from the proof, so its prover commits B's slope at each of the 88 steps and its identity has a relation for each slope. Here:
 
-- B is the generator [1]₂, which the program checks;
-- C is W2 and δ is [x]₂;
-- e(-C0, [1]₂) is the constant in α, β's place, so the first G1 point is -(A1 - C0), which the program checks against the MSM.
+- The lines of [1]₂ and [x]₂ are constants of the program, 8 words for each step. The witness has no slopes, and the identity no relations for them.
+- The loop state is the Miller value alone, as a fraction N / D: there is no point of G2 to carry. A step squares the value or multiplies it by the residue witness's factor, as in Groth16's loop, and then by the two lines at the two G1 points. If the prover committed the value after the step, the step also adds that value's relation to the sum.
+- e(-C0, [1]₂) is the check's constant, so the first G1 point is -(A1 - C0), which the program checks against the MSM. The second is W2.
 
-A version for two fixed G2 points would save B's slope relations, about 15 M.
+A line of a fixed point has degree 9 as a polynomial in w, where B's has degree 21. One relation therefore carries more steps, and the prover commits 23 of the 88 Miller values, where the Groth16 check commits 37. The quotient has 136 words instead of 80, which costs less than the committed values it replaces.
+
+The steps between two committed values change only N and D, so the loop passes those two words from one step function to the next and reads the rest of its state once per committed value.
+
+The check costs 23.8 M mWU. The Groth16 check, run with B = [1]₂ in its witness, cost 41.8 M. The fixed lines take bytes instead: those of [1]₂ are 11 kB of constants, where their slopes were 6 kB of witness.
 
 ### Padding
 
-The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. The verifier costs more than its program and witness weigh, so a spend adds zero blocks of 512 bytes to the witness. A block earns 0.51 M mWU and costs 0.03 M: 8 k to read its witness node, and 23 k to check that its 16 words are zero.
+The input's budget is 1,000 mWU per byte of its witness stack, plus 50,000. Where the verifier costs more than its program and witness earn, as it does with the Keccak transcript, a spend adds zero blocks of 512 bytes to the witness. A block earns 0.51 M mWU and costs 0.03 M: 8 k to read its witness node, and 23 k to check that its 16 words are zero.
 
 The check runs where the words lie. A block is a balanced tree of words, so its lowest nodes are pairs of words, and each pair takes three jets applied in place: `eq_256` for the two words being equal, and `fe_is_zero` and `scalar_is_zero` for the first one being zero modulo each of the secp256k1 primes. A word below 2^256 that both primes divide is 0, so the pair is zero, and nothing is copied or compared with a constant. A larger tree is checked by the function of its two halves, so a block costs the same whatever the size of its group.
 
-How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size (about 5 minutes), with no group taken and, since `hand`'s dummy sighash is not the transaction's, without the binding. The groups and the binding add their code, so the real program is larger and earns more budget than predicted: the estimate errs on the safe side.
+How many blocks a spend needs depends on the pruned program's size, which is known only at spend time. So the program offers groups of 1, 2, 4, ... 256 blocks, each behind a case on a bit of a 16-bit witness word. A group not taken is pruned. `Fflonk.pad_for` finds the fewest blocks for the pruned program's size, none if its bytes already cover the cost, counting the budget low, as for Groth16 (`budget_ok`, `groth/core/budget.py`). `fflonk_snarkjs.py witness` runs the program once in `hand` to learn that size (about 4 minutes), with no group taken and, since `hand`'s dummy sighash is not the transaction's, without the binding. The groups and the binding add their code, so the real program is larger and earns more budget than predicted: the estimate errs on the safe side.
 
 ## Soundness
 
@@ -121,7 +125,7 @@ How many blocks a spend needs depends on the pruned program's size, which is kno
 - Every hint word is below 2^254 (two bits checked), so its products stay within the CRT bound.
 - Each witness node is read once in the program's tree unfolding (`Fflonk.compile` checks it), so a spender who unshares a node cannot give its copies different values.
 - The challenges are recomputed from the transcript. The evaluations, the public inputs and the challenge words must be canonical, which is stricter than snarkjs: snarkjs reduces an evaluation mod r. `fflonk_snarkjs.py` reads proof.json as snarkjs does (each evaluation a decimal string below 2^256, reduced mod r), so the witness it writes holds the canonical words.
-- The pairing check's soundness is as `docs/groth16.md` explains, and the program checks its G2 slot and both G1 slots.
+- The pairing check's soundness is as `docs/groth16.md` explains, with the relations of the committed Miller values only. The lines of the two G2 points are constants of the program, so no slope is a hint, and `tests/test_pairing_fixed.py` compares their product with the reference Miller loop. The program checks the check's two G1 points on the curve, the first against the MSM's result, and takes W2 from the second.
 - A proof with a commitment at the point at infinity has no witness. snarkjs would accept one, but an honest prover produces one with negligible probability.
 - The key is compiled in, so it is trusted as the deployer's: `snarkjs.fflonk_key` checks that its points are on the curves and X_2 in the order-r subgroup, nothing more.
 
@@ -129,4 +133,5 @@ How many blocks a spend needs depends on the pruned program's size, which is kno
 
 - `tests/test_keccak.py`: the permutation and Keccak-256 of 1 to 9 words, against hashlib and test vectors.
 - `tests/test_msm.py`: the group law, the variable-base MSM with and without GLV, and the fixed base, with wrong hints rejected.
-- `tests/test_fflonk.py`: both modes on the proofs in `examples/fflonk`. The honest witness passes at the predicted cost, also padded so the budget covers it. These are rejected: a tampered evaluation, challenge, public input, inverse, column word, scalar, MSM hint, G1 slot or G2 slot, and, in Keccak mode, a valid proof for another sighash.
+- `tests/test_pairing_fixed.py`: the pairing check for two fixed G2 points alone. Its line constants give the reference Miller loop, every relation is odd and of the degree the generator counts, and the program rejects a wrong Miller value, residue witness or point that is sealed consistently, a wrong challenge, and a point off the curve.
+- `tests/test_fflonk.py`: both modes on the proofs in `examples/fflonk`. The honest witness passes at the predicted cost, also padded so the budget covers it. These are rejected: a tampered evaluation, challenge, public input, inverse, column word, scalar, MSM hint or point of the pairing check, and, in Keccak mode, a valid proof for another sighash.

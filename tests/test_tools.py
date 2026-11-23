@@ -6,7 +6,8 @@ PublicMerkleRoot(0), tree depth 1), the flags must agree, its checks survive pyt
 whose leaves do not give the public signal is refused, as is one whose sighash is not the first public
 signal (--sighash-input).  --fix K=VALUE compiles a public signal into the key: the folded key accepts the
 proof with that value and no other, the binding applies to the signals left, and `witness` refuses a
-proof whose public.json has another value.
+proof whose public.json has another value.  --signal-bits N is a multiple of 8 from 184 to 248, goes with
+a binding only, and a witness whose signal has another width is refused.
 
 tools/fflonk_snarkjs.py: --bind or --unbound is required; a key point off the curve is refused, also
 under python -O, and so is a proof made with the other transcript.  The proof's evaluations load reduced
@@ -179,6 +180,24 @@ def check_fix(T, tmp):
     assert os.path.exists(out + '.w0.json')
 
 
+def check_signal_bits(T, tmp):
+    """--signal-bits on the example key, whose signal is a root of 253 bits."""
+    vk = os.path.join(EXAMPLE, 'verification_key.json')
+    files = [vk, os.path.join(EXAMPLE, 'proof.json'), os.path.join(EXAMPLE, 'public.json')]
+    out = os.path.join(tmp, 'sb')
+    for n in ('190', '176', '128', '252', '256', '0'):  # 176 and below: the budget would not cover the cost
+        refused(T.main, ['program', vk, '--values', '1', '--signal-bits', n, '--out', out], expect='multiple of 8')
+    refused(T.main, ['program', vk, '--unbound', '--signal-bits', '200', '--out', out], expect='not with --unbound')
+    assert not os.path.exists(out + '.simpl')
+    T.main(['program', vk, '--values', '1', '--signal-bits', '200', '--out', out])
+    T.main(['program', vk, '--values', '1', '--out', out + '_full'])
+    assert os.path.getsize(out + '.simpl') < os.path.getsize(out + '_full.simpl')  # tables for 200 bits only
+    # the example's proof is for a signal of 253 bits: a verifier of 200 has no witness for it
+    argv = ['witness', *files, '--leaves', os.path.join(EXAMPLE, 'leaves.json'), '--signal-bits', '200', '--out', out]
+    refused(T.main, argv, expect='cut to 200 bits')
+    assert not os.path.exists(out + '.w0.json')
+
+
 def check_ptau(tmp):
     D = load('demo')
     info = '# of Constraints: 5\n# of Public Inputs: 0\n# of Outputs: 1\n'  # 2^3 > 5 + 1
@@ -319,6 +338,7 @@ def main():
         check_wrong_leaves(T, tmp)
         check_sighash_input(T, tmp)
         check_fix(T, tmp)
+        check_signal_bits(T, tmp)
         check_ptau(tmp)
         check_fflonk(tmp)
         check_loaders(tmp)

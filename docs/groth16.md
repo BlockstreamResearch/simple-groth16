@@ -73,7 +73,7 @@ The generator is a Python library, `groth/`, that writes the program as text in 
 | `groth16/verifier.py` | the whole verifier |
 | `core/bn254.py` | the plain-Python reference everything is tested against |
 
-The fflonk verifier adds `core/keccak.py`, `core/msm.py`, `core/frprog.py` and `fflonk/`.
+The fflonk verifier adds `core/pairing_fixed.py` (the same identity for two fixed G2 points), `core/keccak.py`, `core/msm.py`, `core/frprog.py` and `fflonk/`.
 
 The rest of this document follows the layers from the bottom up.
 
@@ -234,6 +234,12 @@ A circuit that cannot hash, such as a Noir circuit converted to R1CS (docs/noir.
 A key compiled with `--unbound` has none of this. Its public inputs are whatever the spender proves, so the statement's constants must be fixed in the circuit, and a broadcast witness can be reused in any transaction to the same output. `tools/groth16_snarkjs.py` therefore binds unless `--unbound` is given, also for `PublicMerkleRoot(0)`, whose tree holds only the sighash.
 
 Some public inputs have the same value in every proof a program should accept: the hash of the program that a wrapper circuit proves, a version, an exit code. Such an input need not reach the verifier. L = IC_0 + Σ x_i IC_i is linear in the inputs, so the term x_k IC_k of a fixed input is a constant point: `--fix K=VALUE` adds it to IC_0 and drops IC_k from the key (`fix_inputs` in groth/groth16/verifier.py), and the program is the verifier of a key with one input fewer. It accepts a proof exactly when the proof is valid with the fixed value, and it saves that input's cost and bytes. The value is part of the program, so another value gives another address. The binding applies to the inputs that are left: with `--values` there must be one, the root, and with `--sighash-input` the sighash stays first. [groth16-fs-verifier](https://github.com/jmoik/groth16-fs-verifier), a Groth16 verifier in Bitcoin Script, folds the constant inputs of SP1's wrapper circuit into IC_0 in the same way.
+
+The signal can also be shorter. The verifier pays for every 8 bits of a public input, and 253 bits are more than a binding needs against replay. `--signal-bits N` makes the signal the low N bits of the root, or of the sighash, for N a multiple of 8 from 184 to 248. The circuit exposes the same bits (`PublicMerkleRootBits(n, N)` in circuits/public_merkle.circom), the tables cover those bits only, and the binding, which compares the whole input word, also shows that the input has no bit above them. With 200 bits the toy spend weighs 47.6 kWU where 253 bits take 50.7 ([benchmarks.md](benchmarks.md)).
+
+What a shorter signal gives up is margin, of two kinds. Someone who sees a spend and wants to use its proof in another transaction needs a second transaction, or other sibling values, with the same signal: a second preimage, 2^N work, which stays far out of reach. Two transactions with the same signal are a collision, 2^(N/2) work: 2^100 for 200 bits, where 253 bits give 2^126. A collision serves someone who can propose the transaction, or the values behind the root, that the prover then proves for, because the proof fits the other one as well. So the default stays at 253 bits. A shorter signal suits outputs whose transactions the prover alone builds, or a margin in line with the curve's own: BN254 gives [no more than 100 bits](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-pairing-friendly-curves-11).
+
+The lower bound of 184 bits is not a choice of margin. A shorter signal takes bytes off the program faster than cost, and below 184 bits the one-input verifier would cost more than its bytes pay for: every spend of such a program would be refused. The generator does not emit one, and tests/test_binding.py checks that the budget covers the cost at 184 bits.
 
 ## Budget
 
